@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from ber_automation.config import get_settings
+from ber_automation.geospatial.scale import initial_bearing
 from ber_automation.models import Coordinates
 
 STATIC_MAP_URL = "https://maps.googleapis.com/maps/api/staticmap"
@@ -57,7 +58,7 @@ async def fetch_satellite_image(
 async def fetch_streetview_image(
     coords: Coordinates,
     output_path: str | Path,
-    heading: int = 0,
+    heading: float | None = None,
     fov: int | None = None,
     pitch: int | None = None,
     size: str | None = None,
@@ -67,7 +68,8 @@ async def fetch_streetview_image(
     Args:
         coords: GPS coordinates.
         output_path: File path to save the image.
-        heading: Camera heading (0-360 degrees).
+        heading: Camera heading in degrees (0-360). When *None* (default) the
+            heading is auto-computed from the camera position to *coords*.
         fov: Field of view (default from settings).
         pitch: Camera pitch (default from settings).
         size: Image size as "WxH".
@@ -93,6 +95,14 @@ async def fetch_streetview_image(
 
     if meta.get("status") != "OK":
         return None
+
+    # Auto-compute heading from camera position to target building
+    if heading is None:
+        cam = meta.get("location")
+        if cam and "lat" in cam and "lng" in cam:
+            heading = initial_bearing(cam["lat"], cam["lng"], coords.lat, coords.lng)
+        else:
+            heading = 0
 
     params = {
         "location": location,

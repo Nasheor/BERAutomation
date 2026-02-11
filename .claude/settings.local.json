@@ -21,7 +21,12 @@
       "Bash(python -m pytest:*)",
       "Bash(python main.py:*)",
       "Bash(python:*)",
-      "Bash(.venv\\\\Scripts\\\\pip install:*)"
+      "Bash(.venv\\\\Scripts\\\\pip install:*)",
+      "Bash(.venv\\\\Scripts\\\\python.exe -m pytest:*)",
+      "Bash(C:UsersnagarPyCharmProjectsBERAutomation.venvScriptspython.exe -m pytest C:UsersnagarPyCharmProjectsBERAutomationtests -v)",
+      "Bash(cmd /c \"cd /d C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation && .venv\\\\Scripts\\\\python.exe -m pytest tests\\\\ -v 2>&1\")",
+      "Bash(cmd /c:*)",
+      "Bash(powershell:*)"
     ]
   }
 }

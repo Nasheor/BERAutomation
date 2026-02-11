@@ -41,3 +41,28 @@ def meters_to_pixels(meters: float, lat: float, zoom: int) -> float:
     if mpp == 0:
         return 0.0
     return meters / mpp
+
+
+def initial_bearing(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Compute the initial (forward) geodesic bearing from point 1 to point 2.
+
+    Uses the spherical law formula. Returns a bearing in degrees [0, 360).
+
+    Args:
+        lat1: Latitude of the origin point (degrees).
+        lng1: Longitude of the origin point (degrees).
+        lat2: Latitude of the destination point (degrees).
+        lng2: Longitude of the destination point (degrees).
+
+    Returns:
+        Bearing in degrees, 0 = North, 90 = East, etc.
+    """
+    φ1 = math.radians(lat1)
+    φ2 = math.radians(lat2)
+    Δλ = math.radians(lng2 - lng1)
+
+    x = math.sin(Δλ) * math.cos(φ2)
+    y = math.cos(φ1) * math.sin(φ2) - math.sin(φ1) * math.cos(φ2) * math.cos(Δλ)
+
+    θ = math.degrees(math.atan2(x, y))
+    return θ % 360
