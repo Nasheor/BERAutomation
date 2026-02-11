@@ -1,0 +1,88 @@
+@startuml calculation_flow
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontSize 12
+skinparam ActivityBackgroundColor #F5F5F5
+
+title HWB Calculation Flow\n(Faithful to Excel Tool)
+
+start
+
+:""**INPUT**""
+length, width, storeys, storey_height,
+building_type, construction_epoch,
+country, heating_system, residents;
+
+partition "**1. Geometry** (Excel C2-P2)" #DDEBF7 {
+  :gross_area = length x width x storeys  ""(C2)"";
+  :net_area = gross_area x **0.8**  ""(D2)"";
+  :envelope = ((L + W) x 2) x storeys x height  ""(E2)"";
+  :roof = floor = L x W  ""(K2, L2)"";
+  if (building_type?) then (Detached)
+    :party_walls = 0;
+  elseif (Semi-D Length) then
+    :party_walls = L x storeys x height;
+  elseif (Semi-D Width) then
+    :party_walls = W x storeys x height;
+  elseif (Terraced Length) then
+    :party_walls = L x storeys x height x 2;
+  else (Terraced Width)
+    :party_walls = W x storeys x height x 2;
+  endif
+  :windows = envelope x fraction
+  (**0.15** det / **0.14** semi / **0.13** terr)  ""(J2)"";
+  :window_per_orientation = windows / 4  ""(K2-N2)"";
+  :ext_walls = (envelope - windows) - party_walls  ""(N2)"";
+  :volume = net_area x (height - **0.35**) x storeys  ""(P2)"";
+}
+
+partition "**2. Transmission Loss** (Excel AT2-AW2)" #E2EFDA {
+  :Look up U-values by epoch
+  (U_win, U_roof, U_floor, U_wall);
+  :L_e = U_win x A_win x 1.0
+       + U_roof x A_roof x 1.0
+       + U_floor x A_floor x **0.7**
+       + U_wall x A_ext x 1.0  ""(AT2)"";
+  :U_mean = L_e / (A_win + A_roof + A_floor + A_ext);
+  :L_psi = max(**0.2** x (**0.75** - U_mean) x L_e, 0)  ""(AU2)"";
+  :L_t = L_e + L_psi  ""(AV2)"";
+  :Q_t = **0.024** x L_t x HDD  ""(AW2)"";
+}
+
+partition "**3. Ventilation Loss** (Excel BB2-BC2)" #FFF2CC {
+  :L_v = **0.34** x **0.4** x volume  ""(BB2)"";
+  :Q_v = **0.024** x L_v x HDD  ""(BC2)"";
+}
+
+partition "**4. Internal Gains** (Excel BG2)" #FCE4D6 {
+  :Q_i = **0.024** x **3.75** x net_area x heating_days  ""(BG2)"";
+}
+
+partition "**5. Solar Gains** (Excel BU2)" #D9E2F3 {
+  :g_eff = g_value x **0.9** x **0.98**  ""(BT2)"";
+  :Q_s = (Irr_N x A_N + Irr_E x A_E
+       + Irr_S x A_S + Irr_W x A_W)
+       x **0.75** x g_eff  ""(BU2)"";
+}
+
+partition "**6. Results** (Excel BY2-CG2)" #EDEDED {
+  :Q_heating = max(0, Q_t + Q_v - Q_i - Q_s)  ""(BY2)"";
+  :HWB = Q_heating / gross_area  ""(BZ2)"";
+  :Q_hotwater = residents x 40 x 365
+             x (4.2/3600) x 45  ""(CB2)"";
+  :final_energy = Q_heating / eff
+               + Q_hotwater / eff_hw;
+  :primary_energy = final_energy x PEF;
+  :CO2 = final_energy x CO2_factor;
+  :BER_band = lookup(primary_energy / m2);
+}
+
+:""**OUTPUT**""
+BER Band (A1-G)
+kWh/m2/yr (primary)
+CO2 kg/m2/yr
+Full breakdown;
+
+stop
+@enduml
+```

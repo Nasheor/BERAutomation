@@ -1,0 +1,67 @@
+@startuml components
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontSize 12
+skinparam packageStyle rectangle
+
+title BER Automation - Component Architecture
+
+package "Presentation Layer" #DDEBF7 {
+  [Streamlit App\napp/streamlit_app.py] as ui
+  [CLI Entry Point\nmain.py] as cli
+}
+
+package "Orchestration Layer" #E2EFDA {
+  [BERPipeline\nber_automation/pipeline.py] as pipeline
+}
+
+package "Geospatial Module\nber_automation/geospatial/" #FFF2CC {
+  [EircodeGeocoder\ngeocoder.py] as geocoder
+  [ImageryFetcher\nimagery.py] as imagery
+  [Scale Calculator\nscale.py] as scale
+}
+
+package "Vision Module\nber_automation/vision/" #FCE4D6 {
+  [OpenCV Footprint\nfootprint.py] as footprint
+  [Claude Analyzer\nclaude_analyzer.py] as claude
+}
+
+package "BER Engine\nber_automation/ber_engine/" #D9E2F3 {
+  [HWBCalculator\ncalculator.py] as calculator
+  [Constants & Lookups\nconstants.py] as constants
+  [Rating Scale\nrating.py] as rating
+}
+
+package "Shared Foundation" #EDEDED {
+  [Pydantic Models\nmodels.py] as models
+  [Settings\nconfig.py] as config
+}
+
+' Presentation -> Orchestration
+ui --> pipeline : Full Pipeline\nMode
+cli --> pipeline
+ui --> calculator : Manual Input\nMode (direct)
+cli --> calculator
+
+' Pipeline -> Modules
+pipeline --> geocoder : Phase 1
+pipeline --> imagery : Phase 2
+pipeline --> footprint : Phase 3
+pipeline --> claude : Phase 4
+pipeline --> calculator : Phase 5
+
+' Internal module dependencies
+footprint --> scale : px -> meters
+calculator --> constants : U-values, HDD,\nefficiencies
+calculator --> rating : kWh/m2 -> BER band
+geocoder --> config : API keys
+imagery --> config : API keys
+claude --> config : API keys
+
+' Everything depends on models
+pipeline ..> models
+calculator ..> models
+geocoder ..> models
+footprint ..> models
+claude ..> models
+@enduml

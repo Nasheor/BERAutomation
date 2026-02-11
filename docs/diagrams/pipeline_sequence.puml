@@ -1,0 +1,101 @@
+@startuml pipeline_sequence
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontSize 12
+skinparam sequenceMessageAlign center
+
+title BER Automation - Pipeline Execution Sequence
+
+actor User
+participant "Streamlit UI /\nCLI" as UI
+participant "BERPipeline" as Pipeline
+participant "EircodeGeocoder" as Geocoder
+participant "Google\nGeocoding API" as GeoAPI
+participant "ImageryFetcher" as Imagery
+participant "Google Maps\nAPIs" as MapsAPI
+participant "OpenCV\nFootprint" as Footprint
+participant "Claude\nAnalyzer" as Claude
+participant "Anthropic\nAPI" as AnthropicAPI
+participant "HWBCalculator" as Calculator
+
+User -> UI : Enter Eircode\n(e.g. "D02 X285")
+UI -> Pipeline : run(eircode)
+activate Pipeline
+
+== Phase 1: Geocoding ==
+Pipeline -> Geocoder : geocode_eircode("D02 X285")
+activate Geocoder
+Geocoder -> Geocoder : validate_eircode()
+Geocoder -> GeoAPI : GET /geocode/json?\naddress=D02+X285&\ncomponents=country:IE
+GeoAPI --> Geocoder : {lat: 53.339, lng: -6.258,\naddress: "..."}
+Geocoder --> Pipeline : Coordinates
+deactivate Geocoder
+
+== Phase 2: Image Fetching (Parallel via asyncio.gather) ==
+Pipeline -> Imagery : fetch_satellite_image(coords)
+activate Imagery
+Pipeline -> Imagery : fetch_streetview_image(coords)
+
+Imagery -> MapsAPI : GET /staticmap?\ncenter=53.339,-6.258&\nzoom=20&maptype=satellite
+Imagery -> MapsAPI : GET /streetview/metadata\n(availability check)
+MapsAPI --> Imagery : metadata: {status: OK}
+Imagery -> MapsAPI : GET /streetview?\nlocation=53.339,-6.258&\nfov=90&pitch=10
+MapsAPI --> Imagery : satellite.png
+MapsAPI --> Imagery : streetview.jpg
+Imagery --> Pipeline : image file paths
+deactivate Imagery
+
+== Phase 3: Footprint Extraction (OpenCV) ==
+Pipeline -> Footprint : extract_footprint(\nsatellite.png, lat=53.339)
+activate Footprint
+note right of Footprint
+  1. Grayscale + bilateral filter
+  2. CLAHE contrast enhancement
+  3. Canny edge detection
+  4. Dilate to close gaps
+  5. Find & score contours:
+     - area, solidity, centrality,
+       rectangularity
+  6. Best contour -> bounding rect
+  7. Pixels x mpp -> meters
+end note
+Footprint --> Pipeline : FootprintResult\n{length: 11.2m, width: 8.7m,\nconfidence: 0.65}
+deactivate Footprint
+
+== Phase 4: AI Building Analysis ==
+Pipeline -> Claude : analyze_streetview(\nstreetview.jpg)
+activate Claude
+Claude -> AnthropicAPI : POST /v1/messages\n[image + structured prompt]
+note right of AnthropicAPI
+  Prompt requests JSON:
+  - construction_epoch
+  - building_type
+  - estimated_storeys
+  - heating_system_guess
+  - confidence + reasoning
+end note
+AnthropicAPI --> Claude : {"epoch": "1990_2000",\n"type": "semi_d_length",\n"storeys": 2, ...}
+Claude --> Pipeline : StreetViewAnalysis
+deactivate Claude
+
+== Phase 5: BER Calculation ==
+Pipeline -> Pipeline : _build_input()\nMerge footprint dims +\nClaude classification +\nuser overrides
+Pipeline -> Calculator : calculate_ber(BuildingInput)
+activate Calculator
+note right of Calculator
+  HWB annual balance:
+  Q_t = 0.024 x L_t x HDD
+  Q_v = 0.024 x L_v x HDD
+  Q_i = 0.024 x 3.75 x net_area x days
+  Q_s = solar x F_s x g_eff
+  Q_h = Q_t + Q_v - Q_i - Q_s
+  final = Q_h / efficiency
+  BER = band(primary / m2)
+end note
+Calculator --> Pipeline : BERResult\n{band: "C1", kWh/m2: 168}
+deactivate Calculator
+
+Pipeline --> UI : PipelineResult
+deactivate Pipeline
+UI --> User : Display:\n- Satellite + Street View images\n- Footprint dimensions\n- AI analysis summary\n- BER band + breakdown\n- CO2 emissions\n- Retrofit comparison
+@enduml

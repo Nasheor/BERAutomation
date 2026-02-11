@@ -1,0 +1,162 @@
+@startuml data_models
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontSize 11
+skinparam classAttributeIconSize 0
+
+title BER Automation - Data Model Class Diagram
+
+enum BuildingType {
+  DETACHED
+  SEMI_D_LENGTH
+  SEMI_D_WIDTH
+  TERRACED_LENGTH
+  TERRACED_WIDTH
+}
+
+enum ConstructionEpoch {
+  BEFORE_1980
+  EPOCH_1980_1990
+  EPOCH_1990_2000
+  EPOCH_2000_2010
+  AFTER_2010
+}
+
+enum HeatingSystem {
+  OIL_BOILER
+  GAS_BOILER
+  BIOMASS
+  ELECTRIC_DIRECT
+  HEAT_PUMP_AIR
+  HEAT_PUMP_GROUND
+  HEAT_PUMP_WATER
+  DISTRICT_HEATING
+}
+
+enum Country {
+  IRELAND
+  FRANCE
+  GERMANY
+  BELGIUM
+  NETHERLANDS
+  AUSTRIA
+}
+
+class Coordinates <<Pydantic>> {
+  +lat: float
+  +lng: float
+  +formatted_address: str
+}
+
+class WindowDoorAreas <<Pydantic>> {
+  +north: float
+  +east: float
+  +south: float
+  +west: float
+  +doors: float
+}
+
+class BuildingInput <<Pydantic>> {
+  +length: float
+  +width: float
+  +heated_storeys: int = 2
+  +storey_height: float = 3.0
+  +building_type: BuildingType
+  +construction_epoch: ConstructionEpoch
+  +country: Country
+  +quantity: int = 1
+  +residents: Optional[float]
+  +window_door_areas: Optional[WindowDoorAreas]
+  +heating_system: HeatingSystem
+  +hot_water_electric_separate: bool
+  --
+  +floor_area_per_storey: float {property}
+  +total_heated_area: float {property}
+  +effective_residents: float {property}
+}
+
+class RetrofitInput <<Pydantic>> {
+  +wall_insulation_cm: float = 12.0
+  +roof_insulation_cm: float = 20.0
+  +window_u_value: float = 1.0
+  +heating_system_after: Optional[HeatingSystem]
+  +hot_water_electric_separate_after: bool
+}
+
+class FootprintResult <<Pydantic>> {
+  +length_m: float
+  +width_m: float
+  +area_m2: float
+  +confidence: float [0..1]
+  +contour_points: list[list[int]]
+}
+
+class StreetViewAnalysis <<Pydantic>> {
+  +construction_epoch: ConstructionEpoch
+  +building_type: BuildingType
+  +estimated_storeys: int
+  +heating_system_guess: HeatingSystem
+  +adjacent_side: str
+  +confidence: float [0..1]
+  +reasoning: str
+}
+
+class HWBResult <<Pydantic>> {
+  +floor_area: float
+  +heated_volume: float
+  +envelope_area: float
+  +transmission_heat_loss: float (W/K)
+  +ventilation_heat_loss: float (W/K)
+  +solar_gains: float (kWh/yr)
+  +internal_gains: float (kWh/yr)
+  +heating_demand_kwh: float
+  +hwb: float (kWh/m2/yr)
+  +final_energy_kwh: float
+  +hot_water_kwh: float
+  +total_kwh_per_m2: float
+  +co2_kg: float
+  +co2_kg_per_m2: float
+}
+
+class BERResult <<Pydantic>> {
+  +ber_band: str (A1..G)
+  +kwh_per_m2: float
+  +color_hex: str
+  +hwb_result: HWBResult
+  +building_input: BuildingInput
+  +retrofit_ber_band: Optional[str]
+  +retrofit_kwh_per_m2: Optional[float]
+  +retrofit_hwb_result: Optional[HWBResult]
+}
+
+class PipelineResult <<Pydantic>> {
+  +eircode: str
+  +coordinates: Optional[Coordinates]
+  +satellite_image_path: Optional[str]
+  +streetview_image_path: Optional[str]
+  +footprint: Optional[FootprintResult]
+  +street_analysis: Optional[StreetViewAnalysis]
+  +ber_result: Optional[BERResult]
+  +errors: list[str]
+}
+
+' Relationships
+BuildingInput --> BuildingType
+BuildingInput --> ConstructionEpoch
+BuildingInput --> HeatingSystem
+BuildingInput --> Country
+BuildingInput o-- WindowDoorAreas
+RetrofitInput --> HeatingSystem
+StreetViewAnalysis --> ConstructionEpoch
+StreetViewAnalysis --> BuildingType
+StreetViewAnalysis --> HeatingSystem
+
+BERResult *-- HWBResult : hwb_result
+BERResult *-- BuildingInput : building_input
+BERResult *-- "0..1" HWBResult : retrofit_hwb_result
+
+PipelineResult *-- "0..1" Coordinates
+PipelineResult *-- "0..1" FootprintResult
+PipelineResult *-- "0..1" StreetViewAnalysis
+PipelineResult *-- "0..1" BERResult
+@enduml

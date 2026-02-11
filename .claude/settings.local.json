@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:episcope.eu)",
+      "WebFetch(domain:wma.ie)",
+      "WebFetch(domain:www.lcea.ie)",
+      "WebFetch(domain:www.seai.ie)",
+      "WebFetch(domain:arrow.tudublin.ie)",
+      "WebFetch(domain:www.cso.ie)",
+      "WebFetch(domain:www.ceardean.com)",
+      "WebFetch(domain:selectra.ie)",
+      "WebFetch(domain:www.evolusioninnovation.com)",
+      "Bash(dir:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(C:UsersAvinashNagarajanPycharmProjectsBerAutomation.venvScriptspip.exe install openpyxl)",
+      "Bash(echo:*)",
+      "Bash(C:UsersAvinashNagarajanPycharmProjectsBerAutomation.venvScriptspip.exe install openpyxl pydantic pydantic-settings httpx anthropic numpy Pillow python-dotenv)",
+      "Bash(pip install:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python main.py:*)",
+      "Bash(python:*)",
+      "Bash(.venv\\\\Scripts\\\\pip install:*)"
+    ]
+  }
+}

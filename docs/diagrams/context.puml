@@ -1,0 +1,36 @@
+@startuml context
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontSize 13
+
+title BER Automation - System Context Diagram
+
+actor "User" as user
+rectangle "BER Automation System" as system {
+  rectangle "Streamlit UI\n(Manual / Pipeline)" as ui
+  rectangle "CLI" as cli
+  rectangle "BER Engine\n(HWB Calculator)" as engine
+  rectangle "Vision\n(OpenCV + Claude)" as vision
+  rectangle "Geospatial\n(Geocoder + Imagery)" as geo
+}
+
+cloud "Google Maps Platform" as google {
+  [Geocoding API]
+  [Static Maps API]
+  [Street View API]
+}
+
+cloud "Anthropic" as anthropic {
+  [Claude Vision API]
+}
+
+user --> ui : Eircode / Manual Input
+user --> cli : CLI arguments
+ui --> engine
+cli --> engine
+geo --> [Geocoding API] : Eircode -> GPS
+geo --> [Static Maps API] : GPS -> Satellite PNG
+geo --> [Street View API] : GPS -> Street View JPG
+vision --> [Claude Vision API] : Image -> Building Classification
+system --> user : BER Rating (A1-G)\n+ Energy Breakdown\n+ CO2 Emissions
+@enduml

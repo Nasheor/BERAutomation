@@ -1,0 +1,67 @@
+{
+  "u_values": {
+    "before_1980": {"KD": 1.35, "OD": 0.65, "AW": 1.20, "DF": 0.55, "FE": 3.00, "AT": 2.50},
+    "1980_1990": {"KD": 0.75, "OD": 0.275, "AW": 0.60, "DF": 0.275, "FE": 2.50, "AT": 2.50},
+    "1990_2000": {"KD": 0.60, "OD": 0.235, "AW": 0.45, "DF": 0.235, "FE": 2.15, "AT": 2.15},
+    "2000_2010": {"KD": 0.35, "OD": 0.20, "AW": 0.35, "DF": 0.20, "FE": 1.40, "AT": 1.40},
+    "after_2010": {"KD": 0.21, "OD": 0.16, "AW": 0.21, "DF": 0.16, "FE": 1.10, "AT": 1.10}
+  },
+  "g_values": {
+    "before_1980": 0.810,
+    "1980_1990": 0.700,
+    "1990_2000": 0.650,
+    "2000_2010": 0.585,
+    "after_2010": 0.465
+  },
+  "heating_degree_days": {
+    "ireland": 2600,
+    "france": 2500,
+    "germany": 3100,
+    "belgium": 2800,
+    "netherlands": 2800,
+    "austria": 3400
+  },
+  "heating_days": {
+    "ireland": 273,
+    "france": 232,
+    "germany": 253,
+    "belgium": 250,
+    "netherlands": 250,
+    "austria": 260
+  },
+  "solar_irradiance": {
+    "ireland": {"north": 100, "east": 150, "south": 270, "west": 150},
+    "france": {"north": 105, "east": 175, "south": 340, "west": 175},
+    "germany": {"north": 95, "east": 155, "south": 295, "west": 155},
+    "belgium": {"north": 95, "east": 150, "south": 280, "west": 150},
+    "netherlands": {"north": 90, "east": 145, "south": 275, "west": 145},
+    "austria": {"north": 90, "east": 150, "south": 290, "west": 150}
+  },
+  "heating_system_efficiency": {
+    "oil_boiler": 0.85,
+    "gas_boiler": 0.90,
+    "biomass": 0.80,
+    "electric_direct": 1.00,
+    "heat_pump_air": 3.00,
+    "heat_pump_ground": 4.00,
+    "district_heating": 0.95
+  },
+  "co2_factors_kg_per_kwh": {
+    "oil_boiler": 0.264,
+    "gas_boiler": 0.205,
+    "biomass": 0.030,
+    "electric_direct": 0.210,
+    "heat_pump_air": 0.210,
+    "heat_pump_ground": 0.210,
+    "district_heating": 0.180
+  },
+  "primary_energy_factors": {
+    "oil_boiler": 1.10,
+    "gas_boiler": 1.10,
+    "biomass": 1.10,
+    "electric_direct": 2.08,
+    "heat_pump_air": 2.08,
+    "heat_pump_ground": 2.08,
+    "district_heating": 1.10
+  }
+}

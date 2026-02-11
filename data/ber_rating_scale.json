@@ -1,0 +1,19 @@
+{
+  "bands": [
+    {"band": "A1", "max_kwh_per_m2": 25, "color": "#00A651"},
+    {"band": "A2", "max_kwh_per_m2": 50, "color": "#4DB848"},
+    {"band": "A3", "max_kwh_per_m2": 75, "color": "#8CC63F"},
+    {"band": "B1", "max_kwh_per_m2": 100, "color": "#BFD730"},
+    {"band": "B2", "max_kwh_per_m2": 125, "color": "#FFF200"},
+    {"band": "B3", "max_kwh_per_m2": 150, "color": "#FFC20E"},
+    {"band": "C1", "max_kwh_per_m2": 175, "color": "#F99D1C"},
+    {"band": "C2", "max_kwh_per_m2": 200, "color": "#F47920"},
+    {"band": "C3", "max_kwh_per_m2": 225, "color": "#EF4136"},
+    {"band": "D1", "max_kwh_per_m2": 260, "color": "#ED1C24"},
+    {"band": "D2", "max_kwh_per_m2": 300, "color": "#C1272D"},
+    {"band": "E1", "max_kwh_per_m2": 340, "color": "#A1232B"},
+    {"band": "E2", "max_kwh_per_m2": 380, "color": "#8B1A29"},
+    {"band": "F", "max_kwh_per_m2": 450, "color": "#6D1A27"},
+    {"band": "G", "max_kwh_per_m2": null, "color": "#4A1525"}
+  ]
+}
