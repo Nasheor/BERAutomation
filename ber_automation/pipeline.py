@@ -12,7 +12,11 @@ from pathlib import Path
 
 from ber_automation.ber_engine.calculator import HWBCalculator
 from ber_automation.geospatial.geocoder import geocode_eircode
-from ber_automation.geospatial.imagery import fetch_satellite_image, fetch_streetview_image
+from ber_automation.geospatial.imagery import (
+    fetch_satellite_image,
+    fetch_streetview_image,
+    fetch_streetview_images,
+)
 from ber_automation.models import (
     BuildingInput,
     BuildingType,
@@ -20,6 +24,7 @@ from ber_automation.models import (
     FootprintResult,
     PipelineResult,
     RetrofitInput,
+    StreetViewAnalysis,
 )
 from ber_automation.vision.claude_analyzer import analyze_satellite, analyze_streetview
 from ber_automation.vision.footprint import extract_footprint
@@ -60,13 +65,14 @@ class BERPipeline:
             result.errors.append(f"Geocoding failed: {e}")
             return result
 
-        # Phase 2: Fetch images (parallel)
-        sat_path = self.output_dir / "satellite.png"
-        sv_path = self.output_dir / "streetview.jpg"
+        # Phase 2: Fetch images (parallel) — satellite + 4 Street View angles
+        sat_path = self.output_dir / "satellite.jpg"
+        sv_dir = self.output_dir / "streetview"
 
         sat_task = fetch_satellite_image(coords, sat_path)
-        sv_task = fetch_streetview_image(coords, sv_path)
+        sv_task = fetch_streetview_images(coords, sv_dir)
 
+        sv_paths: list[Path] = []
         try:
             sat_result, sv_result = await asyncio.gather(
                 sat_task, sv_task, return_exceptions=True
@@ -76,19 +82,38 @@ class BERPipeline:
             elif isinstance(sat_result, Exception):
                 result.errors.append(f"Satellite image failed: {sat_result}")
 
-            if isinstance(sv_result, Path):
-                result.streetview_image_path = str(sv_result)
-            elif sv_result is None:
-                result.errors.append("No Street View available at this location")
+            if isinstance(sv_result, list):
+                sv_paths = sv_result
+                if sv_paths:
+                    # Store first image as the representative for display
+                    result.streetview_image_path = str(sv_paths[0])
+                else:
+                    result.errors.append("No Street View available at this location")
             elif isinstance(sv_result, Exception):
                 result.errors.append(f"Street View failed: {sv_result}")
         except Exception as e:
             result.errors.append(f"Image fetching failed: {e}")
 
-        # Phase 3: Footprint extraction (Claude Vision primary, OpenCV fallback)
+        # Phase 3: Street view analysis (moved before satellite to inform footprint)
+        if sv_paths:
+            try:
+                analysis = await analyze_streetview(sv_paths)
+                result.street_analysis = analysis
+            except Exception as e:
+                result.errors.append(f"Claude analysis failed: {e}")
+
+        # Phase 4: Footprint extraction (Claude Vision primary, OpenCV fallback)
         if result.satellite_image_path:
             claude_fp = None
             opencv_fp = None
+
+            # Build context kwargs from street view when confidence is sufficient
+            sat_kwargs: dict = {}
+            if result.street_analysis and result.street_analysis.confidence >= 0.4:
+                sa = result.street_analysis
+                sat_kwargs["building_type"] = sa.building_type.value
+                sat_kwargs["adjacent_side"] = sa.adjacent_side
+                sat_kwargs["estimated_units_in_row"] = sa.estimated_units_in_row
 
             # Primary: Claude Vision satellite analysis
             try:
@@ -96,6 +121,7 @@ class BERPipeline:
                     result.satellite_image_path,
                     lat=coords.lat,
                     zoom=20,
+                    **sat_kwargs,
                 )
             except Exception as e:
                 result.errors.append(f"Claude satellite analysis failed: {e}")
@@ -112,18 +138,17 @@ class BERPipeline:
 
             # Reconcile results
             footprint = self._reconcile_footprints(claude_fp, opencv_fp)
+
+            # Apply terrace correction safety net
+            if footprint and result.street_analysis:
+                footprint = self._correct_terrace_footprint(
+                    footprint, result.street_analysis,
+                )
+
             if footprint and footprint.confidence > 0:
                 result.footprint = footprint
             else:
                 result.errors.append("Footprint extraction found no building contour")
-
-        # Phase 4: Claude analysis (from street view)
-        if result.streetview_image_path:
-            try:
-                analysis = await analyze_streetview(result.streetview_image_path)
-                result.street_analysis = analysis
-            except Exception as e:
-                result.errors.append(f"Claude analysis failed: {e}")
 
         # Phase 5: Build inputs and calculate BER
         try:
@@ -183,6 +208,61 @@ class BERPipeline:
             return max(candidates, key=lambda fp: fp.confidence)
         return None
 
+    @staticmethod
+    def _correct_terrace_footprint(
+        footprint: FootprintResult,
+        street_analysis: StreetViewAnalysis,
+    ) -> FootprintResult:
+        """Divide the repeating dimension by unit count for terraced/semi-d buildings.
+
+        Safety net: if Claude measured the entire terrace row instead of one unit,
+        this divides the repeating dimension to get a single-unit footprint.
+        """
+        btype = street_analysis.building_type.value
+        units = street_analysis.estimated_units_in_row
+
+        # Only correct for terraced or semi-d with multiple units
+        if units <= 1:
+            return footprint
+        if not btype.startswith(("terraced", "semi_d")):
+            return footprint
+        # Skip correction when confidence is too low
+        if footprint.confidence < 0.4:
+            return footprint
+
+        length = footprint.length_m
+        width = footprint.width_m
+
+        # Determine which dimension repeats based on party wall orientation
+        # Party wall on LENGTH side → units repeat along WIDTH
+        # Party wall on WIDTH side → units repeat along LENGTH
+        if btype in ("terraced_length", "semi_d_length"):
+            per_unit = width / units
+            if per_unit < 4.0:
+                return footprint  # too small — probably already single-unit
+            width = round(per_unit, 1)
+        elif btype in ("terraced_width", "semi_d_width"):
+            per_unit = length / units
+            if per_unit < 4.0:
+                return footprint
+            length = round(per_unit, 1)
+        else:
+            return footprint
+
+        area = round(length * width, 1)
+        # Apply confidence penalty for the correction
+        corrected_confidence = round(max(0.3, footprint.confidence - 0.1), 2)
+
+        return FootprintResult(
+            length_m=length,
+            width_m=width,
+            area_m2=area,
+            confidence=corrected_confidence,
+            source=footprint.source,
+            building_shape=footprint.building_shape,
+            contour_points=footprint.contour_points,
+        )
+
     def _build_input(
         self,
         result: PipelineResult,
@@ -209,8 +289,8 @@ class BERPipeline:
             params["length"] = 10.0
             params["width"] = 8.0
 
-        # Classification from Claude analysis
-        if result.street_analysis:
+        # Classification from Claude analysis (require confidence >= 0.4)
+        if result.street_analysis and result.street_analysis.confidence >= 0.4:
             sa = result.street_analysis
             params["building_type"] = sa.building_type
             params["construction_epoch"] = sa.construction_epoch

@@ -1,5 +1,7 @@
 """Application configuration using pydantic-settings."""
 
+from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +15,7 @@ class Settings(BaseSettings):
     )
 
     google_maps_api_key: str = ""
+    mapbox_access_token: str = ""
     anthropic_api_key: str = ""
 
     # Google Maps defaults
@@ -31,6 +34,7 @@ class Settings(BaseSettings):
     default_occupancy_area: float = 52.0  # m² per person
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Get application settings (cached)."""
     return Settings()

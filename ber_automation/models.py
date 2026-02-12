@@ -138,6 +138,7 @@ class StreetViewAnalysis(BaseModel):
     estimated_storeys: int = 2
     heating_system_guess: HeatingSystem = HeatingSystem.GAS_BOILER
     adjacent_side: str = "length"  # "length" or "width" for semi-d/terraced
+    estimated_units_in_row: int = Field(ge=1, default=1, description="Units in terrace row (1=detached, 2=semi-d)")
     confidence: float = Field(ge=0, le=1, default=0.5)
     reasoning: str = ""
 

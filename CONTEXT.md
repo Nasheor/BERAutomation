@@ -168,10 +168,27 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 - Area must be in [20, 500] m2 or defaults (10m × 8m) are used
 - User overrides always take precedence
 
-### Street View Analysis (`analyze_streetview()`)
-- Sends Street View image to Claude for building classification
+### Street View Analysis — Multi-Angle (`analyze_streetview()`)
+- **Multi-angle capture**: `fetch_streetview_images()` fetches 4 images at 90° intervals
+  around the auto-computed base heading (camera→building bearing)
+- **All images sent in one Claude request**: Claude cross-references front/right/rear/left
+  views to identify features only visible from certain angles (oil tanks, heat pumps,
+  shared walls, gas meters)
+- **Backward-compatible**: accepts a single path (str/Path) or a list of paths
+- **Async client**: uses `anthropic.AsyncAnthropic` (not the synchronous client) to avoid
+  blocking the event loop
+- **Dual prompts**: multi-image prompt instructs cross-referencing; single-image prompt
+  preserved for fallback/testing
 - Returns: construction epoch, building type, storeys, heating system guess, confidence
 - Used in Phase 4, feeds into `_build_input()` for non-geometric parameters
+
+### Claude API Client (async fix)
+- Both `analyze_satellite()` and `analyze_streetview()` now use `anthropic.AsyncAnthropic`
+  with `await client.messages.create(...)`, fixing the previous event-loop-blocking bug
+  where the synchronous `anthropic.Anthropic` client was called from async functions.
+
+### Settings Caching
+- `get_settings()` now uses `@lru_cache(maxsize=1)` to avoid re-parsing `.env` on every call
 
 ### FootprintResult Model Fields
 - `length_m`, `width_m`, `area_m2`, `confidence` — core dimensions
@@ -179,9 +196,19 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 - `source` — `"opencv"`, `"claude_vision"`, or `"fallback"`
 - `building_shape` — `"rectangular"`, `"l_shaped"`, or `"irregular"`
 
+### Street View Confidence Gating
+- `_build_input()` now requires `street_analysis.confidence >= 0.4` before applying
+  Claude's classification (building type, epoch, storeys, heating system)
+- If confidence is below 0.4 (e.g. vegetation-blocked view), safe defaults are used:
+  detached, before_1980, 2 storeys, gas_boiler
+- Prompt includes explicit visibility check: instructs Claude to set confidence <= 0.1
+  when no building facade is visible (trees, hedges, obstructions)
+
 ### Test Coverage
-- 48 tests total (34 original + 14 new)
+- 53 tests total (34 original + 14 vision + 3 streetview multi-image + 2 confidence gating)
 - `tests/test_satellite_analysis.py` covers:
-  - `analyze_satellite()` — valid response, malformed JSON, out-of-bounds clamping (mocked Claude API)
+  - `analyze_satellite()` — valid response, malformed JSON, out-of-bounds clamping (mocked async Claude API)
+  - `analyze_streetview()` — single image backward-compat, multi-image (4 views sent), malformed JSON defaults
   - `_reconcile_footprints()` — agreement boost, disagreement, Claude fallback, both fail, low confidence
-  - `_build_input()` — high/low confidence, unreasonable area, clamping, no footprint, overrides
+  - `_build_input()` — high/low confidence, unreasonable area, clamping, no footprint, overrides,
+    high-confidence street analysis used, low-confidence street analysis ignored

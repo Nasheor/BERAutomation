@@ -155,14 +155,23 @@ if mode == "Full Pipeline (Eircode)":
                 for err in pr.errors:
                     st.warning(err)
 
-        # Images
-        img_cols = st.columns(2)
+        # Images — satellite + up to 4 Street View angles
         if pr.satellite_image_path and Path(pr.satellite_image_path).exists():
-            with img_cols[0]:
-                st.image(pr.satellite_image_path, caption="Satellite View")
-        if pr.streetview_image_path and Path(pr.streetview_image_path).exists():
-            with img_cols[1]:
-                st.image(pr.streetview_image_path, caption="Street View")
+            st.image(pr.satellite_image_path, caption="Satellite View", width=400)
+
+        # Show all available Street View angles
+        sv_dir = Path("output") / "streetview"
+        sv_images = sorted(sv_dir.glob("streetview_*.jpg")) if sv_dir.exists() else []
+        if sv_images:
+            st.subheader("Street View (Multi-Angle)")
+            sv_cols = st.columns(len(sv_images))
+            labels = ["Front", "Right", "Rear", "Left"]
+            for i, (col, img_p) in enumerate(zip(sv_cols, sv_images)):
+                label = labels[i] if i < len(labels) else f"View {i}"
+                with col:
+                    st.image(str(img_p), caption=label)
+        elif pr.streetview_image_path and Path(pr.streetview_image_path).exists():
+            st.image(pr.streetview_image_path, caption="Street View")
 
         # Footprint
         if pr.footprint:
