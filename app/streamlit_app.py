@@ -159,6 +159,19 @@ st.markdown("""
     }
     .onboard-card h4 { margin: 8px 0 6px; color: #1A1A2E; }
     .onboard-card p { color: #6B7280; font-size: 0.9rem; margin: 0; }
+
+    /* Larger form labels and inputs in manual-input tabs */
+    .stTabs [data-baseweb="tab-panel"] label,
+    .stTabs [data-baseweb="tab-panel"] .stMarkdown p {
+        font-size: 1rem !important;
+    }
+    .stTabs [data-baseweb="tab-panel"] input,
+    .stTabs [data-baseweb="tab-panel"] [data-baseweb="select"] {
+        font-size: 1rem !important;
+    }
+    .stTabs [data-baseweb="tab-list"] button {
+        font-size: 1.05rem !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -319,7 +332,7 @@ def _display_ber(ber: BERResult):
 
     with col2:
         hw = ber.hwb_result
-        st.plotly_chart(_make_energy_breakdown_chart(hw), use_container_width=True)
+        st.plotly_chart(_make_energy_breakdown_chart(hw), width="stretch")
 
     with col3:
         st.metric("CO\u2082 Emissions", f"{hw.co2_kg_per_m2:.1f} kg/m\u00b2/yr")
@@ -336,7 +349,7 @@ def _display_ber(ber: BERResult):
     # BER gauge
     st.plotly_chart(
         _make_ber_gauge(ber.ber_band, ber.kwh_per_m2),
-        use_container_width=True,
+        width="stretch",
     )
 
     # --- Retrofit comparison ---
@@ -427,7 +440,7 @@ if mode == "Full Pipeline (Eircode)":
                  "the property and fetch satellite/street imagery.",
         )
     with col2:
-        run_btn = st.button("Analyse", type="primary", use_container_width=True)
+        run_btn = st.button("Analyse", type="primary", width="stretch")
 
     if run_btn and eircode:
         with st.status("Running BER pipeline\u2026", expanded=True) as status:
