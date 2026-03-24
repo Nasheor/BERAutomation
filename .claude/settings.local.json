@@ -28,7 +28,8 @@
       "Bash(cmd /c:*)",
       "Bash(powershell:*)",
       "Bash(\".venv\\\\Scripts\\\\python.exe\":*)",
-      "Bash(\".venv\\\\Scripts\\\\python.exe\" -c \"import os, datetime; st = os.stat\\(''output/satellite.png''\\); print\\(f''Last modified: {datetime.datetime.fromtimestamp\\(st.st_mtime\\)}''\\); print\\(f''Size: {st.st_size} bytes''\\)\")"
+      "Bash(\".venv\\\\Scripts\\\\python.exe\" -c \"import os, datetime; st = os.stat\\(''output/satellite.png''\\); print\\(f''Last modified: {datetime.datetime.fromtimestamp\\(st.st_mtime\\)}''\\); print\\(f''Size: {st.st_size} bytes''\\)\")",
+      "Bash(.venv/Scripts/python:*)"
     ]
   }
 }

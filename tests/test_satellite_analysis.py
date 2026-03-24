@@ -269,7 +269,7 @@ class TestBuildInputValidation:
 
     def _make_pipeline_result(self, footprint=None, street_analysis=None):
         return PipelineResult(
-            eircode="D02X285",
+            address="D02X285",
             footprint=footprint,
             street_analysis=street_analysis,
         )

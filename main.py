@@ -28,8 +28,14 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # --- pipeline command ---
-    pipe_p = sub.add_parser("pipeline", help="Run full pipeline from Eircode")
-    pipe_p.add_argument("eircode", help="Irish Eircode (e.g. D02X285)")
+    pipe_p = sub.add_parser("pipeline", help="Run full pipeline from address or postal code")
+    pipe_p.add_argument("address", help="Address or postal code (e.g. 'D02X285', '1010 Luxembourg', '4051 Basel')")
+    pipe_p.add_argument(
+        "--country",
+        choices=[c.value for c in Country],
+        default="ireland",
+        help="Country for geocoding filter and climate data (default: ireland)",
+    )
     pipe_p.add_argument("--output-dir", default="output", help="Output directory")
 
     # --- manual command ---
@@ -78,7 +84,7 @@ def main():
 
 def _run_pipeline(args):
     pipeline = BERPipeline(output_dir=args.output_dir)
-    result = asyncio.run(pipeline.run(args.eircode))
+    result = asyncio.run(pipeline.run(args.address, country=Country(args.country)))
 
     if result.errors:
         print("Warnings:")

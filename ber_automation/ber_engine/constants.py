@@ -76,11 +76,13 @@ G_VALUES: dict[ConstructionEpoch, float] = {
 # Source: degreedays.net (2022)
 # ---------------------------------------------------------------------------
 HEATING_DEGREE_DAYS: dict[Country, float] = {
-    Country.IRELAND: 2149.1,        # C21 (Mullingar)
-    Country.FRANCE: 1461.9999999999995,  # C17 (Le Mans, NW)
-    Country.GERMANY: 2157.1,        # C19 (Paderborn, NW)
-    Country.BELGIUM: 1825.5,        # C16 (Beauvechain)
-    Country.NETHERLANDS: 1921.3,    # C22 (Herwijnen)
+    Country.IRELAND: 2149.1,        # C21 (Mullingar) — degreedays.net 2022
+    Country.FRANCE: 1461.9999999999995,  # C17 (Le Mans, NW) — degreedays.net 2022
+    Country.GERMANY: 2157.1,        # C19 (Paderborn, NW) — degreedays.net 2022
+    Country.BELGIUM: 1825.5,        # C16 (Beauvechain) — degreedays.net 2022
+    Country.NETHERLANDS: 1921.3,    # C22 (Herwijnen) — degreedays.net 2022
+    Country.LUXEMBOURG: 2140.0,     # Luxembourg City — degreedays.net (base 15.5°C)
+    Country.SWITZERLAND: 2415.0,    # Basel-Binningen (NW Switzerland) — degreedays.net (base 15.5°C)
     Country.AUSTRIA: 3400.0,        # placeholder - not in Excel data
 }
 
@@ -90,12 +92,14 @@ HEATING_DEGREE_DAYS: dict[Country, float] = {
 # Source: PHPP software
 # ---------------------------------------------------------------------------
 HEATING_DAYS: dict[Country, float] = {
-    Country.IRELAND: 219.0,    # F21 (Birr)
-    Country.FRANCE: 187.0,     # F17 (Rennes, NW)
-    Country.GERMANY: 211.0,    # F19 (Munster, NW)
-    Country.BELGIUM: 209.0,    # F16 (Ukkel)
-    Country.NETHERLANDS: 212.0, # F22 (De Bilt)
-    Country.AUSTRIA: 260.0,    # placeholder
+    Country.IRELAND: 219.0,     # F21 (Birr) — PHPP
+    Country.FRANCE: 187.0,      # F17 (Rennes, NW) — PHPP
+    Country.GERMANY: 211.0,     # F19 (Munster, NW) — PHPP
+    Country.BELGIUM: 209.0,     # F16 (Ukkel) — PHPP
+    Country.NETHERLANDS: 212.0, # F22 (De Bilt) — PHPP
+    Country.LUXEMBOURG: 218.0,  # Luxembourg City — PHPP
+    Country.SWITZERLAND: 225.0, # Basel-Binningen (NW Switzerland) — PHPP
+    Country.AUSTRIA: 260.0,     # placeholder
 }
 
 # ---------------------------------------------------------------------------
@@ -133,6 +137,20 @@ SOLAR_IRRADIANCE: dict[Country, dict[str, float]] = {
         "east": 239.0,    # H22
         "south": 365.0,   # I22
         "west": 243.0,    # J22
+    },
+    Country.LUXEMBOURG: {
+        # Luxembourg City — PHPP (interpolated from BE/DE neighbours)
+        "north": 140.0,
+        "east": 218.0,
+        "south": 334.0,
+        "west": 222.0,
+    },
+    Country.SWITZERLAND: {
+        # Basel-Binningen (NW Switzerland) — PHPP
+        "north": 118.0,
+        "east": 228.0,
+        "south": 418.0,
+        "west": 230.0,
     },
     Country.AUSTRIA: {
         "north": 90.0,
@@ -191,8 +209,50 @@ CO2_FACTOR_TONNES: dict[HeatingSystem, float] = {
 }
 
 # Convenience: kg CO2 per kWh (multiply tonnes by 1000)
+# NOTE: Electric heating systems below use Irish SEAI values as placeholder only.
+# At runtime the calculator substitutes ELECTRICITY_CO2_FACTOR[country] for those systems.
 CO2_FACTOR: dict[HeatingSystem, float] = {
     k: v * 1000.0 for k, v in CO2_FACTOR_TONNES.items()
+}
+
+# ---------------------------------------------------------------------------
+# ELECTRICITY CO2 EMISSION FACTORS by country (kg CO2 / kWh delivered electricity)
+# Applied at runtime to ELECTRIC_DIRECT, HEAT_PUMP_*, overriding CO2_FACTOR above.
+# Sources: national grid operators / statistical agencies, 2022 reporting year.
+# ---------------------------------------------------------------------------
+ELECTRICITY_CO2_FACTOR: dict[Country, float] = {
+    Country.IRELAND:     0.2100,  # SEAI Conversion Factors 2022
+    Country.FRANCE:      0.0520,  # RTE Bilan Électrique 2022 (nuclear-dominated)
+    Country.GERMANY:     0.3850,  # UBA Emissionsfaktoren 2022
+    Country.BELGIUM:     0.1630,  # ELIA grid data 2022
+    Country.NETHERLANDS: 0.2900,  # RVO/CBS Energie in Nederland 2022
+    Country.LUXEMBOURG:  0.1970,  # ILR/STATEC 2022 (net importer from FR/DE mix)
+    Country.SWITZERLAND: 0.0290,  # SFOE Schweizerische Elektrizitätsstatistik 2022
+    Country.AUSTRIA:     0.1560,  # E-Control Ökostromstatistik 2022
+}
+
+# Electric heating system types — used to dispatch to ELECTRICITY_CO2_FACTOR
+ELECTRIC_HEATING_SYSTEMS: frozenset[HeatingSystem] = frozenset({
+    HeatingSystem.ELECTRIC_DIRECT,
+    HeatingSystem.HEAT_PUMP_AIR,
+    HeatingSystem.HEAT_PUMP_GROUND,
+    HeatingSystem.HEAT_PUMP_WATER,
+})
+
+# ---------------------------------------------------------------------------
+# PRIMARY ENERGY FACTORS FOR ELECTRICITY by country (dimensionless)
+# National values per each country's EPBD transposition / building regulations.
+# Applied to ELECTRIC_DIRECT, HEAT_PUMP_*, overriding PRIMARY_ENERGY_FACTOR above.
+# ---------------------------------------------------------------------------
+ELECTRICITY_PEF: dict[Country, float] = {
+    Country.IRELAND:     2.08,  # SEAI / S.I. 259/2016
+    Country.FRANCE:      2.58,  # RE2020 (Réglementation Environnementale 2020)
+    Country.GERMANY:     1.80,  # GEG 2020 (Gebäudeenergiegesetz)
+    Country.BELGIUM:     2.50,  # EPB Regulations (Flanders/Wallonia)
+    Country.NETHERLANDS: 1.45,  # NTA 8800:2022
+    Country.LUXEMBOURG:  2.00,  # Règlement Grand-Ducal 2016
+    Country.SWITZERLAND: 2.00,  # SIA 380/1:2016
+    Country.AUSTRIA:     2.60,  # OIB Richtlinie 6:2019
 }
 
 # ---------------------------------------------------------------------------
@@ -301,3 +361,110 @@ BER_BANDS: list[tuple[str, float, str]] = [
     ("F",  450.0,  "#6D1A27"),
     ("G",  float("inf"), "#4A1525"),
 ]
+
+# ---------------------------------------------------------------------------
+# NATIVE EPC RATING SCALES by country
+# Each entry: (band_label, upper_threshold_kWh/m²/yr_primary_energy, hex_color)
+# Thresholds are in primary energy kWh/m²/yr to match the tool's output metric.
+# Sources: national building regulation documents (see country_data.md for detail).
+# ---------------------------------------------------------------------------
+EPC_SCALE_NAME: dict[Country, str] = {
+    Country.IRELAND:     "BER",
+    Country.FRANCE:      "DPE",
+    Country.GERMANY:     "Energieausweis",
+    Country.BELGIUM:     "EPC (Flanders)",
+    Country.NETHERLANDS: "Energielabel",
+    Country.LUXEMBOURG:  "Energiepass",
+    Country.SWITZERLAND: "GEAK",
+    Country.AUSTRIA:     "Energieausweis",
+}
+
+NATIVE_EPC_BANDS: dict[Country, list[tuple[str, float, str]]] = {
+    Country.IRELAND: BER_BANDS,  # Irish BER is the native scale
+    Country.FRANCE: [
+        # DPE (2021 reform) — primary energy EP, kWh/m²/yr
+        # Source: Arrêté du 31 mars 2021 (RE2020)
+        ("A", 70.0,          "#319A56"),
+        ("B", 110.0,         "#51BA6B"),
+        ("C", 180.0,         "#CBDA4B"),
+        ("D", 250.0,         "#F5EB3A"),
+        ("E", 330.0,         "#EBA73A"),
+        ("F", 420.0,         "#E5773B"),
+        ("G", float("inf"), "#D94137"),
+    ],
+    Country.GERMANY: [
+        # Energieausweis (GEG 2020) — primary energy, kWh/m²/yr
+        # Source: Gebäudeenergiegesetz §80
+        ("A+", 30.0,         "#00A651"),
+        ("A",  50.0,         "#4DB848"),
+        ("B",  75.0,         "#8CC63F"),
+        ("C",  100.0,        "#D7DF23"),
+        ("D",  130.0,        "#FFF200"),
+        ("E",  160.0,        "#FDB913"),
+        ("F",  200.0,        "#F7941D"),
+        ("G",  250.0,        "#ED1C24"),
+        ("H",  float("inf"),"#C1272D"),
+    ],
+    Country.BELGIUM: [
+        # EPC Flanders (EPB 2022) — primary energy, kWh/m²/yr
+        # Source: Vlaams Energieagentschap EPB-regelgeving
+        ("A+", 0.0,          "#00A651"),
+        ("A",  100.0,        "#4DB848"),
+        ("B",  200.0,        "#8CC63F"),
+        ("C",  300.0,        "#FFF200"),
+        ("D",  400.0,        "#FDB913"),
+        ("E",  500.0,        "#F7941D"),
+        ("F",  float("inf"),"#ED1C24"),
+    ],
+    Country.NETHERLANDS: [
+        # Energielabel (NTA 8800:2022) — primary fossil energy, kWh/m²/yr
+        # Source: RVO / NEN 7120 / NTA 8800
+        ("A++++", 0.0,         "#00A651"),
+        ("A+++",  25.0,        "#00A651"),
+        ("A++",   50.0,        "#4DB848"),
+        ("A+",    100.0,       "#8CC63F"),
+        ("A",     160.0,       "#D7DF23"),
+        ("B",     200.0,       "#FFF200"),
+        ("C",     250.0,       "#FDB913"),
+        ("D",     300.0,       "#F7941D"),
+        ("E",     375.0,       "#ED1C24"),
+        ("F",     450.0,       "#C1272D"),
+        ("G",     float("inf"),"#A1232B"),
+    ],
+    Country.LUXEMBOURG: [
+        # Energiepass (Règlement Grand-Ducal 2016) — primary energy, kWh/m²/yr
+        # Source: Ministère de l'Énergie et de l'Aménagement du territoire
+        ("A+", 0.0,          "#00A651"),
+        ("A",  45.0,         "#4DB848"),
+        ("B",  95.0,         "#8CC63F"),
+        ("C",  150.0,        "#D7DF23"),
+        ("D",  200.0,        "#FFF200"),
+        ("E",  300.0,        "#F7941D"),
+        ("F",  400.0,        "#ED1C24"),
+        ("G",  float("inf"),"#A1232B"),
+    ],
+    Country.SWITZERLAND: [
+        # GEAK (Gebäudeenergieausweis der Kantone) — primary energy, kWh/m²/yr
+        # Source: GEAK-Handbuch, EnDK / SIA 380/1:2016
+        ("A", 55.0,          "#00A651"),
+        ("B", 90.0,          "#4DB848"),
+        ("C", 140.0,         "#8CC63F"),
+        ("D", 200.0,         "#FFF200"),
+        ("E", 260.0,         "#F7941D"),
+        ("F", 360.0,         "#ED1C24"),
+        ("G", float("inf"), "#A1232B"),
+    ],
+    Country.AUSTRIA: [
+        # Energieausweis (OIB Richtlinie 6:2019) — primary energy, kWh/m²/yr
+        # Source: Österreichisches Institut für Bautechnik OIB-330.6-009/19
+        ("A++", 15.0,        "#00A651"),
+        ("A+",  30.0,        "#00A651"),
+        ("A",   55.0,        "#4DB848"),
+        ("B",   80.0,        "#8CC63F"),
+        ("C",   120.0,       "#D7DF23"),
+        ("D",   160.0,       "#FFF200"),
+        ("E",   200.0,       "#F7941D"),
+        ("F",   280.0,       "#ED1C24"),
+        ("G+",  float("inf"),"#A1232B"),
+    ],
+}

@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 from ber_automation.ber_engine.calculator import HWBCalculator
-from ber_automation.geospatial.geocoder import geocode_eircode
+from ber_automation.geospatial.geocoder import geocode_address
 from ber_automation.geospatial.imagery import (
     fetch_satellite_image,
     fetch_streetview_image,
@@ -21,6 +21,7 @@ from ber_automation.models import (
     BuildingInput,
     BuildingType,
     Coordinates,
+    Country,
     FootprintResult,
     PipelineResult,
     RetrofitInput,
@@ -40,14 +41,18 @@ class BERPipeline:
 
     async def run(
         self,
-        eircode: str,
+        address: str,
+        country: Country | None = None,
         retrofit: RetrofitInput | None = None,
         overrides: dict | None = None,
     ) -> PipelineResult:
-        """Run the full pipeline for an Eircode.
+        """Run the full pipeline for any address.
 
         Args:
-            eircode: Irish Eircode (e.g. "D02 X285").
+            address: Address or postal code in any supported country
+                     (e.g. "D02 X285", "1010 Luxembourg", "4051 Basel").
+            country: Country for geocoding filter and climate data.
+                     Defaults to Ireland when not specified.
             retrofit: Optional retrofit parameters for comparison.
             overrides: Optional dict of BuildingInput field overrides
                        (e.g. {"heating_system": "gas_boiler"}).
@@ -55,11 +60,11 @@ class BERPipeline:
         Returns:
             PipelineResult with all intermediate and final results.
         """
-        result = PipelineResult(eircode=eircode)
+        result = PipelineResult(address=address)
 
         # Phase 1: Geocode
         try:
-            coords = await geocode_eircode(eircode)
+            coords = await geocode_address(address, country)
             result.coordinates = coords
         except Exception as e:
             result.errors.append(f"Geocoding failed: {e}")
@@ -97,7 +102,7 @@ class BERPipeline:
         # Phase 3: Street view analysis (moved before satellite to inform footprint)
         if sv_paths:
             try:
-                analysis = await analyze_streetview(sv_paths)
+                analysis = await analyze_streetview(sv_paths, country=country)
                 result.street_analysis = analysis
             except Exception as e:
                 result.errors.append(f"Claude analysis failed: {e}")
@@ -121,6 +126,7 @@ class BERPipeline:
                     result.satellite_image_path,
                     lat=coords.lat,
                     zoom=20,
+                    country=country,
                     **sat_kwargs,
                 )
             except Exception as e:
@@ -152,7 +158,7 @@ class BERPipeline:
 
         # Phase 5: Build inputs and calculate BER
         try:
-            building_input = self._build_input(result, overrides)
+            building_input = self._build_input(result, country, overrides)
             ber_result = self.calculator.calculate_ber(building_input, retrofit)
             result.ber_result = ber_result
         except Exception as e:
@@ -266,10 +272,15 @@ class BERPipeline:
     def _build_input(
         self,
         result: PipelineResult,
+        country: Country | None = None,
         overrides: dict | None = None,
     ) -> BuildingInput:
         """Assemble BuildingInput from pipeline results and overrides."""
         params: dict = {}
+
+        # Set country for climate data (default to Ireland for backwards compat)
+        if country is not None:
+            params["country"] = country
 
         # Dimensions from footprint (raised threshold from 0.2 to 0.4)
         if result.footprint and result.footprint.confidence >= 0.4:

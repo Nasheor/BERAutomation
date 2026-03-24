@@ -59,6 +59,8 @@ COUNTRY_LABELS: dict[str, str] = {
     Country.GERMANY.value: "Germany",
     Country.BELGIUM.value: "Belgium",
     Country.NETHERLANDS.value: "Netherlands",
+    Country.LUXEMBOURG.value: "Luxembourg",
+    Country.SWITZERLAND.value: "Switzerland",
     Country.AUSTRIA.value: "Austria",
 }
 
@@ -194,22 +196,23 @@ with st.sidebar:
     st.caption("v1.0")
     mode = st.radio(
         "Mode",
-        ["Full Pipeline (Eircode)", "Manual Input"],
+        ["Full Pipeline", "Manual Input"],
         index=1,
-        help="**Full Pipeline** geocodes an Eircode, fetches imagery, "
+        help="**Full Pipeline** geocodes an address, fetches imagery, "
              "runs AI analysis, and calculates the BER automatically. "
              "**Manual Input** lets you enter building details directly.",
     )
     st.divider()
     with st.expander("About this tool"):
         st.markdown(
-            "This tool estimates an Irish Building Energy Rating (BER) "
-            "using the HWB annual heat-balance method.\n\n"
+            "Estimates building energy performance using the HWB annual "
+            "heat-balance method for all CIRCUS Interreg NWE partner countries.\n\n"
             "**Data sources**\n"
             "- U-values: OIB / Austrian guidelines\n"
             "- Climate: degreedays.net & PHPP\n"
-            "- CO\u2082 factors: SEAI conversion factors\n"
-            "- BER scale: SEAI domestic BER thresholds"
+            "- CO\u2082 factors: national grid operators (2022)\n"
+            "- Primary energy factors: national EPBD regulations\n"
+            "- Ratings: Irish BER (reference) + native country EPC scale"
         )
     st.caption("\u00a9 2025 BER Automation")
 
@@ -321,14 +324,26 @@ def _display_ber(ber: BERResult):
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
-        # Main rating badge with contrast-safe text color
+        # Main rating badge (Irish BER — common reference scale)
         st.markdown(
             f"<div style='background-color:{ber.color_hex}; color:{text_col}; "
             f"text-align:center; padding:20px; border-radius:10px; "
             f"font-size:48px; font-weight:bold;'>{ber.ber_band}</div>",
             unsafe_allow_html=True,
         )
-        st.metric("Energy", f"{ber.kwh_per_m2:.0f} kWh/m\u00b2/yr")
+        st.caption("Irish BER (reference scale)")
+        st.metric("Primary Energy", f"{ber.kwh_per_m2:.0f} kWh/m\u00b2/yr")
+
+        # Native country EPC badge (shown when country is not Ireland)
+        if ber.native_epc_band and ber.native_epc_scale and ber.building_input.country.value != "ireland":
+            native_text = _text_color_for_bg(ber.native_epc_color or "#888888")
+            st.markdown(
+                f"<div style='background-color:{ber.native_epc_color}; color:{native_text}; "
+                f"text-align:center; padding:12px; border-radius:10px; "
+                f"font-size:32px; font-weight:bold; margin-top:8px;'>{ber.native_epc_band}</div>",
+                unsafe_allow_html=True,
+            )
+            st.caption(f"Native scale: {ber.native_epc_scale}")
 
     with col2:
         hw = ber.hwb_result
@@ -401,6 +416,8 @@ def _display_ber(ber: BERResult):
             band_jump = _ber_band_index(ber.ber_band) - _ber_band_index(ber.retrofit_ber_band)
             if band_jump > 0:
                 st.success(f"Improved by {band_jump} BER band{'s' if band_jump > 1 else ''}")
+            if ber.retrofit_native_epc_band and ber.native_epc_scale and ber.building_input.country.value != "ireland":
+                st.info(f"Native {ber.native_epc_scale}: {ber.native_epc_band} → {ber.retrofit_native_epc_band}")
 
     # --- BER Scale bar ---
     st.markdown("<div class='section-header'><h3>BER Scale</h3></div>",
@@ -428,25 +445,33 @@ def _display_ber(ber: BERResult):
 # ===================================================================
 # MODE 1: Full Pipeline
 # ===================================================================
-if mode == "Full Pipeline (Eircode)":
-    st.markdown("<div class='section-header'><h3>Enter Eircode</h3></div>",
+if mode == "Full Pipeline":
+    st.markdown("<div class='section-header'><h3>Enter Address</h3></div>",
                 unsafe_allow_html=True)
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 2, 1])
     with col1:
-        eircode = st.text_input(
-            "Eircode",
-            placeholder="e.g. D02 X285",
-            help="An Irish Eircode (7 characters). This is used to geocode "
-                 "the property and fetch satellite/street imagery.",
+        address = st.text_input(
+            "Address or postal code",
+            placeholder="e.g. D02 X285 or 1010 Luxembourg",
+            help="Any address or postal code in a supported CIRCUS NWE country. "
+                 "Used to geocode the property and fetch satellite/street imagery.",
         )
     with col2:
+        pipeline_country = st.selectbox(
+            "Country",
+            [c.value for c in Country],
+            format_func=lambda x: COUNTRY_LABELS.get(x, x),
+            help="Select the country to restrict geocoding and set climate data.",
+            key="pipeline_country",
+        )
+    with col3:
         run_btn = st.button("Analyse", type="primary", width="stretch")
 
-    if run_btn and eircode:
+    if run_btn and address:
         with st.status("Running BER pipeline\u2026", expanded=True) as status:
-            st.write("Geocoding Eircode and fetching imagery\u2026")
+            st.write("Geocoding address and fetching imagery\u2026")
             pipeline = BERPipeline(output_dir=Path("output"))
-            result = _run_async(pipeline.run(eircode))
+            result = _run_async(pipeline.run(address, country=Country(pipeline_country)))
             st.session_state.pipeline_result = result
 
             if result.coordinates:
@@ -540,9 +565,9 @@ if mode == "Full Pipeline (Eircode)":
             st.markdown(
                 "<div class='onboard-card'>"
                 "<span class='step-num'>1</span>"
-                "<h4>Enter Eircode</h4>"
-                "<p>Type an Irish Eircode above, e.g. <b>D02 X285</b> "
-                "or <b>T12 AB34</b></p>"
+                "<h4>Enter Address</h4>"
+                "<p>Type a postal code or address, e.g. <b>D02 X285</b> "
+                "(Ireland) or <b>1010 Luxembourg</b></p>"
                 "</div>",
                 unsafe_allow_html=True,
             )

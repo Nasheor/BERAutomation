@@ -36,6 +36,9 @@ from ber_automation.ber_engine.constants import (
     AIR_HEAT_CAPACITY,
     CO2_FACTOR,
     DIRT_FACTOR,
+    ELECTRIC_HEATING_SYSTEMS,
+    ELECTRICITY_CO2_FACTOR,
+    ELECTRICITY_PEF,
     FLOOR_THICKNESS,
     FLOOR_U_FACTOR,
     FRAME_FACTOR,
@@ -58,16 +61,31 @@ from ber_automation.ber_engine.constants import (
     U_VALUES,
     WINDOW_AREA_FRACTION,
 )
-from ber_automation.ber_engine.rating import get_ber_band
+from ber_automation.ber_engine.rating import get_ber_band, get_native_epc
 from ber_automation.models import (
     BERResult,
     BuildingInput,
     BuildingType,
+    Country,
     HeatingSystem,
     HWBResult,
     RetrofitInput,
     WindowDoorAreas,
 )
+
+
+def _co2_factor(system: HeatingSystem, country: Country) -> float:
+    """Return kg CO₂/kWh for a heating system, using country-specific grid factor for electric systems."""
+    if system in ELECTRIC_HEATING_SYSTEMS:
+        return ELECTRICITY_CO2_FACTOR[country]
+    return CO2_FACTOR[system]
+
+
+def _pef(system: HeatingSystem, country: Country) -> float:
+    """Return primary energy factor for a heating system, country-specific for electric systems."""
+    if system in ELECTRIC_HEATING_SYSTEMS:
+        return ELECTRICITY_PEF[country]
+    return PRIMARY_ENERGY_FACTOR[system]
 
 
 class HWBCalculator:
@@ -89,9 +107,10 @@ class HWBCalculator:
         """Calculate BER rating, optionally including retrofit scenario."""
         hwb_result = self.calculate(building)
 
-        pef = PRIMARY_ENERGY_FACTOR[building.heating_system]
+        pef = _pef(building.heating_system, building.country)
         primary_kwh_per_m2 = hwb_result.total_kwh_per_m2 * pef
         band, color = get_ber_band(primary_kwh_per_m2)
+        native_band, native_color, native_scale = get_native_epc(primary_kwh_per_m2, building.country)
 
         result = BERResult(
             ber_band=band,
@@ -99,17 +118,22 @@ class HWBCalculator:
             color_hex=color,
             hwb_result=hwb_result,
             building_input=building,
+            native_epc_band=native_band,
+            native_epc_scale=native_scale,
+            native_epc_color=native_color,
         )
 
         if retrofit:
             retrofit_hwb = self.calculate_with_retrofit_uvalues(building, retrofit)
             retrofit_building = self._apply_retrofit(building, retrofit)
-            pef_r = PRIMARY_ENERGY_FACTOR[retrofit_building.heating_system]
+            pef_r = _pef(retrofit_building.heating_system, retrofit_building.country)
             retrofit_primary = retrofit_hwb.total_kwh_per_m2 * pef_r
             r_band, _ = get_ber_band(retrofit_primary)
+            r_native_band, _, _ = get_native_epc(retrofit_primary, retrofit_building.country)
             result.retrofit_ber_band = r_band
             result.retrofit_kwh_per_m2 = round(retrofit_primary, 1)
             result.retrofit_hwb_result = retrofit_hwb
+            result.retrofit_native_epc_band = r_native_band
 
         return result
 
@@ -296,11 +320,11 @@ class HWBCalculator:
         total_kwh_per_m2 = final_total / gross_area if gross_area > 0 else 0.0
 
         # --- CO2 ---
-        co2_heating = final_heating * CO2_FACTOR[b.heating_system]
+        co2_heating = final_heating * _co2_factor(b.heating_system, b.country)
         if b.hot_water_electric_separate:
-            co2_hotwater = final_hotwater * CO2_FACTOR[HeatingSystem.ELECTRIC_DIRECT]
+            co2_hotwater = final_hotwater * _co2_factor(HeatingSystem.ELECTRIC_DIRECT, b.country)
         else:
-            co2_hotwater = final_hotwater * CO2_FACTOR[b.heating_system]
+            co2_hotwater = final_hotwater * _co2_factor(b.heating_system, b.country)
         co2_total = co2_heating + co2_hotwater
 
         return HWBResult(

@@ -12,11 +12,23 @@ from ber_automation.config import get_settings
 from ber_automation.geospatial.scale import meters_per_pixel
 from ber_automation.models import (
     BuildingType,
+    Country,
     ConstructionEpoch,
     FootprintResult,
     HeatingSystem,
     StreetViewAnalysis,
 )
+
+COUNTRY_NAMES: dict[Country, str] = {
+    Country.IRELAND: "Irish",
+    Country.FRANCE: "French",
+    Country.GERMANY: "German",
+    Country.BELGIUM: "Belgian",
+    Country.NETHERLANDS: "Dutch",
+    Country.LUXEMBOURG: "Luxembourgish",
+    Country.SWITZERLAND: "Swiss",
+    Country.AUSTRIA: "Austrian",
+}
 
 _ANALYSIS_BODY = """
 {
@@ -38,24 +50,25 @@ BEFORE analysing building features, assess whether a residential building is act
 
 Only set confidence above 0.5 if you can clearly see architectural features (wall material, windows, roofline). Set confidence between 0.2-0.5 if the building is only partially visible.
 
-## Irish Building Era Indicators
+## Building Era Indicators (North-West Europe)
 
-**Before 1980**: Solid walls (9-inch brick or stone), single-glazed timber windows, no cavity insulation, chimneys prominent, older slate or tile roofs, pebble-dash render common.
+**Before 1980**: Solid masonry walls (brick or stone), single-glazed timber windows, no cavity insulation, prominent chimneys, older slate or clay-tile roofs, render or exposed brick facades.
 
-**1980-1990**: Cavity block walls begin, timber or early PVC windows (still often single-glazed), basic roof insulation, blockwork render, some flat-roof extensions.
+**1980-1990**: Cavity block walls introduced, timber or early PVC windows (often still single-glazed), basic roof insulation, blockwork render, some flat-roof extensions.
 
 **1990-2000**: Standard cavity block, PVC double-glazed windows common, concrete tile roofs, plaster/dash render, more uniform suburban estates.
 
-**2000-2010**: Improved cavity wall insulation, double-glazed PVC throughout, concrete tiles, modern render/brick facades, larger window areas, building regs improved.
+**2000-2010**: Improved cavity wall insulation, double-glazed PVC throughout, concrete tiles, modern render/brick facades, larger window areas, tightened building regulations.
 
-**After 2010**: High-performance insulation, triple-glazed windows possible, clean modern facades, potential heat pump units visible, NZEB-influenced design, often flat or low-pitch roofs.
+**After 2010**: High-performance insulation, triple-glazed windows possible, clean modern facades, potential heat pump units visible, near-zero energy building (NZEB/passive) influences, often flat or low-pitch roofs.
 
 ## Heating System Clues
-- Oil boiler: external oil tank (green/grey cylindrical or rectangular tank)
+- Oil boiler: external oil tank (cylindrical or rectangular, often green/grey)
 - Gas boiler: gas meter on external wall, boiler flue on wall
-- Heat pump (air source): large external fan unit (box-shaped)
+- Heat pump (air source): large external fan unit (box-shaped, often on side/rear wall)
+- District heating: no boiler or tank visible, pipe connections at ground level
 - Biomass: woodchip/pellet storage, larger flue
-- If no clear indicator, default to gas_boiler for 2000+ builds, oil_boiler for older
+- If no clear indicator, default to gas_boiler for 2000+ builds, oil_boiler for older rural buildings; district_heating is common in urban Luxembourg, Netherlands and Germany
 
 ## Building Type
 - Detached: standalone, no shared walls
@@ -72,28 +85,31 @@ Only set confidence above 0.5 if you can clearly see architectural features (wal
 
 Return ONLY the JSON object, no other text."""
 
-ANALYSIS_PROMPT_SINGLE = (
-    "You are an expert building surveyor analysing an Irish residential building "
-    "from a Google Street View image.\n\n"
-    "Analyse this image and return a JSON object with the following fields:"
-    + _ANALYSIS_BODY
-)
 
-ANALYSIS_PROMPT = (
-    "You are an expert building surveyor analysing an Irish residential building "
-    "from multiple Google Street View images taken at different angles "
-    "(approximately 90 degrees apart) around the same location.\n\n"
-    "Cross-reference all views to build a complete picture of the building. "
-    "Look for details that may only be visible from certain angles (e.g. an oil "
-    "tank at the side, a heat pump at the rear, a shared wall only visible from "
-    "the side).\n\n"
-    "Analyse these images and return a JSON object with the following fields:"
-    + _ANALYSIS_BODY
-)
+def _build_streetview_prompt(country_adj: str, multi: bool) -> str:
+    if multi:
+        return (
+            f"You are an expert building surveyor analysing a {country_adj} residential building "
+            f"from multiple Google Street View images taken at different angles "
+            f"(approximately 90 degrees apart) around the same location.\n\n"
+            f"Cross-reference all views to build a complete picture of the building. "
+            f"Look for details that may only be visible from certain angles (e.g. an oil "
+            f"tank at the side, a heat pump at the rear, a shared wall only visible from "
+            f"the side).\n\n"
+            f"Analyse these images and return a JSON object with the following fields:"
+            + _ANALYSIS_BODY
+        )
+    return (
+        f"You are an expert building surveyor analysing a {country_adj} residential building "
+        f"from a Google Street View image.\n\n"
+        f"Analyse this image and return a JSON object with the following fields:"
+        + _ANALYSIS_BODY
+    )
 
 
 async def analyze_streetview(
     image_paths: str | Path | list[str | Path],
+    country: Country | None = None,
 ) -> StreetViewAnalysis:
     """Send Street View image(s) to Claude Vision for building analysis.
 
@@ -103,6 +119,7 @@ async def analyze_streetview(
 
     Args:
         image_paths: Path (or list of paths) to Street View image file(s).
+        country: Country context for the prompt (defaults to Ireland).
 
     Returns:
         StreetViewAnalysis with building classification and confidence.
@@ -134,7 +151,8 @@ async def analyze_streetview(
         })
 
     # Choose prompt based on single vs multi-image
-    prompt_text = ANALYSIS_PROMPT if len(image_paths) > 1 else ANALYSIS_PROMPT_SINGLE
+    country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
+    prompt_text = _build_streetview_prompt(country_adj, multi=len(image_paths) > 1)
     content.append({"type": "text", "text": prompt_text})
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -194,7 +212,7 @@ async def analyze_streetview(
     )
 
 
-SATELLITE_ANALYSIS_PROMPT = """You are an expert building surveyor analysing a Google Maps satellite image of an Irish residential property.
+SATELLITE_ANALYSIS_PROMPT = """You are an expert building surveyor analysing a Google Maps satellite image of a {country_adj} residential property.
 
 Your task: identify the BUILDING ROOF footprint and estimate its dimensions in meters.
 
@@ -208,12 +226,12 @@ Your task: identify the BUILDING ROOF footprint and estimate its dimensions in m
 3. Estimate the building's LENGTH (longest side) and WIDTH (shortest side) in meters
 4. If the building is L-shaped or irregular, estimate the dimensions of the main rectangular portion
 
-## Typical Irish House Dimensions
-- Small terraced: 6-8m x 5-7m
-- Semi-detached: 8-10m x 6-8m
-- Detached: 9-14m x 7-10m
-- Large detached: 12-20m x 8-12m
-- Very few Irish houses exceed 20m in any dimension
+## Typical NWE Residential House Dimensions
+- Small terraced: 5-8m x 5-7m
+- Semi-detached: 7-11m x 6-9m
+- Detached: 8-14m x 7-11m
+- Large detached: 12-20m x 8-13m
+- Very few houses in this region exceed 22m in any dimension
 
 ## Response Format
 Return ONLY a JSON object:
@@ -233,6 +251,7 @@ async def analyze_satellite(
     building_type: str | None = None,
     adjacent_side: str | None = None,
     estimated_units_in_row: int | None = None,
+    country: Country | None = None,
 ) -> FootprintResult:
     """Send a satellite image to Claude Vision for building footprint analysis.
 
@@ -243,6 +262,7 @@ async def analyze_satellite(
         building_type: Building type from street view (e.g. "terraced_length").
         adjacent_side: Which side is shared ("length" or "width").
         estimated_units_in_row: Number of units in terrace row.
+        country: Country context for the prompt (defaults to Ireland).
 
     Returns:
         FootprintResult with estimated dimensions and confidence.
@@ -264,8 +284,9 @@ async def analyze_satellite(
     ground_w = 640 * mpp
     ground_h = 640 * mpp
 
+    country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
     prompt = SATELLITE_ANALYSIS_PROMPT.format(
-        mpp=mpp, ground_w=ground_w, ground_h=ground_h,
+        country_adj=country_adj, mpp=mpp, ground_w=ground_w, ground_h=ground_h,
     )
 
     # Inject building-type context from street view when available

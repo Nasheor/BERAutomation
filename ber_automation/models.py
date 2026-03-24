@@ -41,12 +41,18 @@ class HeatingSystem(str, Enum):
 
 
 class Country(str, Enum):
-    """Supported countries/regions for climate data."""
+    """Supported countries/regions for climate data.
+
+    All seven Interreg North-West Europe (CIRCUS) programme countries are supported,
+    plus Austria (used in the original HWB Excel tool).
+    """
     IRELAND = "ireland"
     FRANCE = "france"
     GERMANY = "germany"
     BELGIUM = "belgium"
     NETHERLANDS = "netherlands"
+    LUXEMBOURG = "luxembourg"
+    SWITZERLAND = "switzerland"
     AUSTRIA = "austria"
 
 
@@ -171,21 +177,27 @@ class HWBResult(BaseModel):
 
 class BERResult(BaseModel):
     """Final BER rating result."""
-    ber_band: str           # e.g. "B2"
+    ber_band: str           # e.g. "B2" (Irish BER scale, common reference)
     kwh_per_m2: float       # total primary energy kWh/m²/year
     color_hex: str          # display color
     hwb_result: HWBResult
     building_input: BuildingInput
 
+    # Native country EPC rating (e.g. "C" on French DPE, "B" on German Energieausweis)
+    native_epc_band: Optional[str] = None
+    native_epc_scale: Optional[str] = None   # e.g. "DPE", "Energieausweis"
+    native_epc_color: Optional[str] = None
+
     # Optional retrofit comparison
     retrofit_ber_band: Optional[str] = None
     retrofit_kwh_per_m2: Optional[float] = None
     retrofit_hwb_result: Optional[HWBResult] = None
+    retrofit_native_epc_band: Optional[str] = None
 
 
 class PipelineResult(BaseModel):
     """Complete pipeline output."""
-    eircode: str
+    address: str
     coordinates: Optional[Coordinates] = None
     satellite_image_path: Optional[str] = None
     streetview_image_path: Optional[str] = None
