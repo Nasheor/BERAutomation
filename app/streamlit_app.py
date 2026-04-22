@@ -192,6 +192,7 @@ st.markdown(
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
+    st.image(Path(__file__).parent.parent / "images" / "circus_logo.jpg", width="stretch")
     st.markdown("### BER Automation")
     st.caption("v1.0")
     mode = st.radio(
@@ -227,6 +228,10 @@ if "whatif_history" not in st.session_state:
     st.session_state.whatif_history = []   # list[dict] — one entry per scenario
 if "whatif_latest" not in st.session_state:
     st.session_state.whatif_latest = None  # BERResult | None
+if "uploaded_satellite" not in st.session_state:
+    st.session_state.uploaded_satellite = None  # bytes | None
+if "uploaded_sv_images" not in st.session_state:
+    st.session_state.uploaded_sv_images = {}    # dict[int, bytes]
 
 # ---------------------------------------------------------------------------
 # Plotly helpers
@@ -1087,6 +1092,8 @@ if mode == "Full Pipeline":
             st.session_state.pipeline_result = result
             st.session_state.whatif_history = []
             st.session_state.whatif_latest = None
+            st.session_state.uploaded_satellite = None
+            st.session_state.uploaded_sv_images = {}
 
             if result.coordinates:
                 st.write("\u2705 Location found")
@@ -1133,6 +1140,57 @@ if mode == "Full Pipeline":
                                 st.image(str(img_p), caption=label)
             elif pr.streetview_image_path and Path(pr.streetview_image_path).exists():
                 st.image(pr.streetview_image_path, caption="Street View")
+
+        # --- Image replacement & re-analysis ---
+        with st.container(border=True):
+            st.markdown("<div class='section-header'><h3>Replace Images</h3></div>",
+                        unsafe_allow_html=True)
+            with st.expander("Replace images with your own photos", expanded=False):
+                st.caption(
+                    "Upload your own photos to replace the Google images above. "
+                    "Only the slots you fill will be overwritten — leave the rest blank "
+                    "to keep the Google originals."
+                )
+                sat_file = st.file_uploader(
+                    "Satellite image", type=["jpg", "jpeg", "png"], key="upload_sat",
+                )
+                sv_cols = st.columns(4)
+                sv_labels = ["Front (0°)", "Right (90°)", "Rear (180°)", "Left (270°)"]
+                sv_files = [
+                    sv_cols[i].file_uploader(sv_labels[i], type=["jpg", "jpeg", "png"], key=f"upload_sv_{i}")
+                    for i in range(4)
+                ]
+
+                reanalyse_btn = st.button("Re-analyse with my images", type="primary")
+
+            if reanalyse_btn:
+                any_uploaded = sat_file is not None or any(f is not None for f in sv_files)
+                if not any_uploaded:
+                    st.info("No images uploaded — re-analysing with existing Google images.")
+
+                # Write uploaded files to disk, overwriting Google images
+                out_dir = Path("output")
+                if sat_file is not None:
+                    (out_dir / "satellite.jpg").write_bytes(sat_file.getvalue())
+                for i, sv_file in enumerate(sv_files):
+                    if sv_file is not None:
+                        (out_dir / "streetview" / f"streetview_{i}.jpg").write_bytes(sv_file.getvalue())
+
+                try:
+                    with st.status("Re-analysing with uploaded images…", expanded=True) as reanalyse_status:
+                        pipeline = BERPipeline(output_dir=out_dir)
+                        new_result = _run_async(pipeline.reanalyse(
+                            pr,
+                            country=Country(pipeline_country),
+                            satellite_uploaded=sat_file is not None,
+                        ))
+                        st.session_state.pipeline_result = new_result
+                        st.session_state.whatif_history = []
+                        st.session_state.whatif_latest = None
+                        reanalyse_status.update(label="Re-analysis complete", state="complete", expanded=False)
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
 
         # --- Footprint ---
         if pr.footprint:

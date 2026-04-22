@@ -99,7 +99,27 @@ class BERPipeline:
         except Exception as e:
             result.errors.append(f"Image fetching failed: {e}")
 
-        # Phase 3: Street view analysis (moved before satellite to inform footprint)
+        result = await self._run_vision_and_calc(
+            result, coords, sv_paths, country, retrofit, overrides, satellite_zoom=20,
+        )
+        return result
+
+    async def _run_vision_and_calc(
+        self,
+        result: PipelineResult,
+        coords: Coordinates,
+        sv_paths: list[Path],
+        country: Country | None,
+        retrofit: RetrofitInput | None,
+        overrides: dict | None,
+        satellite_zoom: int | None = 20,
+    ) -> PipelineResult:
+        """Run phases 3–5: street view analysis, footprint extraction, BER calc.
+
+        Separated from run() so reanalyse() can call it directly without
+        re-fetching images from Google.
+        """
+        # Phase 3: Street view analysis (before satellite to inform footprint)
         if sv_paths:
             try:
                 analysis = await analyze_streetview(sv_paths, country=country)
@@ -125,14 +145,14 @@ class BERPipeline:
                 claude_fp = await analyze_satellite(
                     result.satellite_image_path,
                     lat=coords.lat,
-                    zoom=20,
+                    zoom=satellite_zoom,
                     country=country,
                     **sat_kwargs,
                 )
             except Exception as e:
                 result.errors.append(f"Claude satellite analysis failed: {e}")
 
-            # Secondary: OpenCV for cross-validation
+            # Secondary: OpenCV for cross-validation (always uses zoom=20 as approx scale)
             try:
                 opencv_fp = extract_footprint(
                     result.satellite_image_path,
@@ -165,6 +185,49 @@ class BERPipeline:
             result.errors.append(f"BER calculation failed: {e}")
 
         return result
+
+    async def reanalyse(
+        self,
+        existing_result: PipelineResult,
+        country: Country | None = None,
+        retrofit: RetrofitInput | None = None,
+        overrides: dict | None = None,
+        satellite_uploaded: bool = False,
+    ) -> PipelineResult:
+        """Re-run vision and calculation phases using images already on disk.
+
+        Skips geocoding and Google image fetching. Call this after the user
+        has replaced one or more image files in the output directory.
+
+        Args:
+            existing_result: Previous PipelineResult (must have coordinates).
+            country: Country for climate data and prompt localisation.
+            retrofit: Optional retrofit parameters.
+            overrides: Optional BuildingInput field overrides.
+            satellite_uploaded: True when the satellite image was replaced by
+                the user — triggers visual-reference scale estimation instead
+                of GPS-derived scale.
+
+        Returns:
+            Fresh PipelineResult with updated analysis results.
+        """
+        if existing_result.coordinates is None:
+            raise ValueError("Cannot reanalyse without coordinates — run the full pipeline first.")
+
+        coords = existing_result.coordinates
+        result = PipelineResult(
+            address=existing_result.address,
+            coordinates=coords,
+            satellite_image_path=existing_result.satellite_image_path,
+            streetview_image_path=existing_result.streetview_image_path,
+        )
+
+        sv_paths = sorted((self.output_dir / "streetview").glob("streetview_*.jpg"))
+
+        return await self._run_vision_and_calc(
+            result, coords, sv_paths, country, retrofit, overrides,
+            satellite_zoom=None if satellite_uploaded else 20,
+        )
 
     @staticmethod
     def _reconcile_footprints(

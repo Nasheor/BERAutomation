@@ -212,13 +212,29 @@ async def analyze_streetview(
     )
 
 
-SATELLITE_ANALYSIS_PROMPT = """You are an expert building surveyor analysing a Google Maps satellite image of a {country_adj} residential property.
+_GPS_SCALE_PARAGRAPH = """\
+## Scale Information
+- Image scale: {mpp:.4f} meters per pixel
+- Image covers approximately {ground_w:.0f}m x {ground_h:.0f}m on the ground"""
+
+_VISUAL_REFERENCE_PARAGRAPH = """\
+## Scale Estimation (no GPS data — estimate from visual references)
+No GPS-derived scale is available for this image. Estimate building dimensions \
+using common reference objects that may be visible:
+- Parked car: ~4.5m long, ~2m wide
+- Parking space (marked bay): ~5m × 2.5m
+- Road lane: ~3.5m wide
+- Residential front door: ~0.9m wide
+- Wheelie bin: ~0.6m wide, ~1.1m tall
+- Person standing: ~1.7m tall
+Identify whichever references are visible, anchor your scale estimate, then \
+measure the building roof footprint."""
+
+SATELLITE_ANALYSIS_PROMPT = """You are an expert building surveyor analysing a satellite image of a {country_adj} residential property.
 
 Your task: identify the BUILDING ROOF footprint and estimate its dimensions in meters.
 
-## Scale Information
-- Image scale: {mpp:.4f} meters per pixel
-- Image covers approximately {ground_w:.0f}m x {ground_h:.0f}m on the ground
+{scale_paragraph}
 
 ## Instructions
 1. Find the BUILDING ROOF — look for a rectangular or L-shaped structure with a distinct roof colour/texture (slate, tile, flat felt)
@@ -247,7 +263,7 @@ Return ONLY a JSON object:
 async def analyze_satellite(
     image_path: str | Path,
     lat: float,
-    zoom: int = 20,
+    zoom: int | None = 20,
     building_type: str | None = None,
     adjacent_side: str | None = None,
     estimated_units_in_row: int | None = None,
@@ -258,7 +274,9 @@ async def analyze_satellite(
     Args:
         image_path: Path to the satellite image file.
         lat: Latitude for scale computation.
-        zoom: Google Maps zoom level.
+        zoom: Google Maps zoom level. Pass None for user-uploaded images where
+            the zoom/altitude is unknown — Claude will estimate scale from
+            visible reference objects instead.
         building_type: Building type from street view (e.g. "terraced_length").
         adjacent_side: Which side is shared ("length" or "width").
         estimated_units_in_row: Number of units in terrace row.
@@ -278,15 +296,16 @@ async def analyze_satellite(
     media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
     media_type = media_types.get(suffix, "image/jpeg")
 
-    # Compute scale for the prompt
-    mpp = meters_per_pixel(lat, zoom)
-    # Assume 640x640 default image size
-    ground_w = 640 * mpp
-    ground_h = 640 * mpp
-
     country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
+    if zoom is not None:
+        mpp = meters_per_pixel(lat, zoom)
+        ground_w = 640 * mpp
+        ground_h = 640 * mpp
+        scale_paragraph = _GPS_SCALE_PARAGRAPH.format(mpp=mpp, ground_w=ground_w, ground_h=ground_h)
+    else:
+        scale_paragraph = _VISUAL_REFERENCE_PARAGRAPH
     prompt = SATELLITE_ANALYSIS_PROMPT.format(
-        country_adj=country_adj, mpp=mpp, ground_w=ground_w, ground_h=ground_h,
+        country_adj=country_adj, scale_paragraph=scale_paragraph,
     )
 
     # Inject building-type context from street view when available
