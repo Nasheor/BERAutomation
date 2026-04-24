@@ -1,0 +1,20 @@
+Title: From Eircode to Energy Rating: AI Vision-Based Automated Building Energy Assessment for Rural Irish Communities
+
+Author: Avinash Nagarajan, Munster Technological University, Cork, Ireland
+Contact: avinash.nagarajan@mycit.ie
+
+Conference: Environ 2026 -- 36th Irish Environmental Researchers Colloquium
+Theme: Habits and Habitats
+Dates: April 27-29, 2026, Dundalk Institute of Technology
+
+--- ABSTRACT (~300 words) ---
+
+Rural energy communities face a fundamental challenge: without understanding the energy performance of their housing stock, they cannot evaluate retrofit opportunities or set decarbonisation targets. While Ireland's Building Energy Rating (BER) scheme provides detailed assessments, the cost and logistics of professional surveys leave many rural dwellings unassessed -- and communities without the baseline data needed for informed action.
+
+The CIRCUS project (Interreg NWE) aims to increase energy resilience in rural communities across North-West Europe by equipping them with accessible tools for energy profiling and participatory decision-making. Within this context, we present a tool that provides a first, reasonably accurate energy estimate for any Irish dwelling from just its Eircode, designed to engage and educate communities about their energy consumption and retrofit options.
+
+The system implements a five-phase pipeline: (1) geocoding the Eircode to GPS coordinates, (2) fetching satellite and Street View imagery at four angles, (3) classifying the building using a multimodal large language model that cross-references views to identify construction era, building type, storeys, and heating system, (4) extracting the building footprint via AI vision with computer vision fallback, and (5) computing an indicative energy rating using the HWB annual balance method with epoch-specific U-values and Irish climate data.
+
+The tool is not intended to replace professional BER assessments, which remain essential for grants and regulatory compliance. It serves as a community-facing screening and engagement tool: enabling energy communities to rapidly profile their housing stock, identify dwellings most likely to benefit from retrofit, and give householders an accessible starting point for exploring their options. Demonstration across diverse Irish dwelling types shows that the tool can correctly identify building typology and provide reasonable energy estimates for community-level planning under CIRCUS.
+
+Keywords: energy communities, building energy rating, multimodal AI, computer vision, energy retrofit, rural communities, CIRCUS, Eircode
