@@ -388,3 +388,122 @@ async def analyze_satellite(
         source="claude_vision",
         building_shape=building_shape,
     )
+
+
+async def detect_windows(image_path: str | Path) -> list[dict]:
+    """Send a Street View image to Claude Vision to detect window bounding boxes.
+
+    Args:
+        image_path: Path to the street view image file.
+
+    Returns:
+        List of {"x1", "y1", "x2", "y2"} dicts (pixel coords) for each visible
+        window. Returns [] if no windows found or on any error.
+    """
+    from PIL import Image  # local import — PIL is guaranteed by streamlit
+
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        return []
+
+    image_path = Path(image_path)
+    if not image_path.exists():
+        return []
+
+    image_bytes = image_path.read_bytes()
+    image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
+    suffix = image_path.suffix.lower()
+    media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+    media_type = media_types.get(suffix, "image/jpeg")
+
+    # Get actual image dimensions for the prompt (PIL reads header only, fast)
+    try:
+        import io
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            img_w, img_h = im.size
+    except Exception:
+        img_w, img_h = 640, 640
+
+    prompt = (
+        f"You are analysing a Google Street View photograph ({img_w}×{img_h} pixels).\n"
+        f"Your task: identify windows on the residential building facade visible in this image.\n\n"
+        f"## Mark ONLY these (windows on building walls):\n"
+        f"- Rectangular glass panes set into building walls\n"
+        f"- Window frames and glazing that are clearly part of a wall surface\n"
+        f"- Both upper-floor and ground-floor windows\n\n"
+        f"## Do NOT mark:\n"
+        f"- Sky, clouds, or any area at or above the building roofline\n"
+        f"- Trees, vegetation, hedges\n"
+        f"- Parked cars, vans, motorcycles, or any vehicles\n"
+        f"- Road surfaces, pavements, gutters\n"
+        f"- Doors, solid walls, or fences with no glass\n"
+        f"- Shop fronts or commercial display glass (unless the building is clearly residential)\n"
+        f"- Distant buildings in the background — only mark the main foreground building\n"
+        f"- Any area you are uncertain about\n\n"
+        f"## Rules:\n"
+        f"- Every window box must be entirely below the roofline of the building\n"
+        f"- Boxes must sit inside the wall — not in the sky or on the ground\n"
+        f"- If no building facade with clear windows is visible, return []\n\n"
+        f"Return ONLY a JSON array, one entry per window (no other text):\n"
+        f'[{{"x1": int, "y1": int, "x2": int, "y2": int}}, ...]\n\n'
+        f"Image coordinates: (0,0) is the top-left pixel, ({img_w},{img_h}) is the bottom-right."
+    )
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    try:
+        message = await client.messages.create(
+            model=settings.claude_model,
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": image_data,
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+        response_text = message.content[0].text.strip()
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            response_text = "\n".join(lines[1:-1])
+        parsed = json.loads(response_text)
+        if not isinstance(parsed, list):
+            return []
+
+        windows = []
+        for w in parsed:
+            if not all(k in w for k in ("x1", "y1", "x2", "y2")):
+                continue
+            try:
+                x1, y1, x2, y2 = int(w["x1"]), int(w["y1"]), int(w["x2"]), int(w["y2"])
+            except (TypeError, ValueError):
+                continue
+            # Ensure correct ordering
+            x1, x2 = min(x1, x2), max(x1, x2)
+            y1, y2 = min(y1, y2), max(y1, y2)
+            bw, bh = x2 - x1, y2 - y1
+            # Filter: must be within image bounds
+            if x1 < 0 or y1 < 0 or x2 > img_w or y2 > img_h:
+                continue
+            # Filter: minimum size (15×15 px) — smaller is noise
+            if bw < 15 or bh < 15:
+                continue
+            # Filter: maximum size — a single window shouldn't dominate the image
+            if bw > img_w * 0.6 or bh > img_h * 0.6:
+                continue
+            # Filter: aspect ratio — windows are roughly 0.2–5× wide-to-tall
+            aspect = bw / bh
+            if aspect < 0.2 or aspect > 5.0:
+                continue
+            windows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
+        return windows
+    except Exception:
+        return []

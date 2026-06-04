@@ -1120,10 +1120,16 @@ if mode == "Full Pipeline":
                         unsafe_allow_html=True)
 
             if pr.satellite_image_path and Path(pr.satellite_image_path).exists():
-                st.image(pr.satellite_image_path, caption="Satellite View", width=400)
+                ann_sat = Path("output") / "satellite_annotated.jpg"
+                display_sat = str(ann_sat) if ann_sat.exists() else pr.satellite_image_path
+                caption_sat = "Satellite View (annotated)" if ann_sat.exists() else "Satellite View"
+                st.image(display_sat, caption=caption_sat, width=400)
 
             sv_dir = Path("output") / "streetview"
-            sv_images = sorted(sv_dir.glob("streetview_*.jpg")) if sv_dir.exists() else []
+            sv_images = sorted(
+                p for p in sv_dir.glob("streetview_*.jpg")
+                if "_annotated" not in p.name
+            ) if sv_dir.exists() else []
             if sv_images:
                 st.markdown("**Street View (Multi-Angle)**")
                 # 2x2 grid instead of 1x4
@@ -1137,7 +1143,9 @@ if mode == "Full Pipeline":
                             idx = offset + i
                             label = labels[idx] if idx < len(labels) else f"View {idx}"
                             with cols[i]:
-                                st.image(str(img_p), caption=label)
+                                ann = img_p.parent / f"{img_p.stem}_annotated.jpg"
+                                display_sv = str(ann) if ann.exists() else str(img_p)
+                                st.image(display_sv, caption=label)
             elif pr.streetview_image_path and Path(pr.streetview_image_path).exists():
                 st.image(pr.streetview_image_path, caption="Street View")
 
@@ -1168,13 +1176,17 @@ if mode == "Full Pipeline":
                 if not any_uploaded:
                     st.info("No images uploaded — re-analysing with existing Google images.")
 
-                # Write uploaded files to disk, overwriting Google images
+                # Write uploaded files to disk, overwriting Google images.
+                # Delete stale annotated siblings first so old overlays
+                # are never shown while re-analysis is in progress.
                 out_dir = Path("output")
                 if sat_file is not None:
                     (out_dir / "satellite.jpg").write_bytes(sat_file.getvalue())
+                    (out_dir / "satellite_annotated.jpg").unlink(missing_ok=True)
                 for i, sv_file in enumerate(sv_files):
                     if sv_file is not None:
                         (out_dir / "streetview" / f"streetview_{i}.jpg").write_bytes(sv_file.getvalue())
+                        (out_dir / "streetview" / f"streetview_{i}_annotated.jpg").unlink(missing_ok=True)
 
                 try:
                     with st.status("Re-analysing with uploaded images…", expanded=True) as reanalyse_status:

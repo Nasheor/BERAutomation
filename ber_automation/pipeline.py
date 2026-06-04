@@ -27,8 +27,8 @@ from ber_automation.models import (
     RetrofitInput,
     StreetViewAnalysis,
 )
-from ber_automation.vision.claude_analyzer import analyze_satellite, analyze_streetview
-from ber_automation.vision.footprint import extract_footprint
+from ber_automation.vision.claude_analyzer import analyze_satellite, analyze_streetview, detect_windows
+from ber_automation.vision.footprint import draw_footprint_overlay, draw_window_boxes, extract_footprint
 
 
 class BERPipeline:
@@ -152,12 +152,16 @@ class BERPipeline:
             except Exception as e:
                 result.errors.append(f"Claude satellite analysis failed: {e}")
 
-            # Secondary: OpenCV for cross-validation (always uses zoom=20 as approx scale)
+            # Secondary: OpenCV for cross-validation (always uses zoom=20 as approx scale).
+            # Pass Claude's dimension estimates so OpenCV selects the contour that best
+            # matches the expected building size rather than a generic best-scoring shape.
             try:
                 opencv_fp = extract_footprint(
                     result.satellite_image_path,
                     lat=coords.lat,
                     zoom=20,
+                    expected_length_m=claude_fp.length_m if claude_fp else None,
+                    expected_width_m=claude_fp.width_m if claude_fp else None,
                 )
             except Exception as e:
                 result.errors.append(f"OpenCV footprint extraction failed: {e}")
@@ -173,8 +177,73 @@ class BERPipeline:
 
             if footprint and footprint.confidence > 0:
                 result.footprint = footprint
+                # Claude gives reliable metric dimensions but unreliable pixel coords.
+                # OpenCV gives pixel-accurate contours. When Claude won the reconciliation,
+                # graft the OpenCV contour for visualization — but only when both tools
+                # measured a similar shape (aspect ratio within ~2×). If they differ,
+                # OpenCV likely found a tree or other non-building feature; in that case
+                # draw_footprint_overlay falls back to a GPS-scale centered rectangle.
+                if (
+                    result.footprint.source == "claude_vision"
+                    and opencv_fp is not None
+                    and opencv_fp.contour_points
+                    and opencv_fp.confidence >= 0.1
+                ):
+                    claude_ar = result.footprint.length_m / max(result.footprint.width_m, 0.1)
+                    opencv_ar = opencv_fp.length_m / max(opencv_fp.width_m, 0.1)
+                    shape_agreement = min(claude_ar, opencv_ar) / max(max(claude_ar, opencv_ar), 0.01)
+                    if shape_agreement >= 0.5:
+                        result.footprint = result.footprint.model_copy(
+                            update={"contour_points": opencv_fp.contour_points}
+                        )
+
+                # Universal centrality guard: any contour whose centroid lies outside
+                # the central half of the 640×640 image is almost certainly a road,
+                # car, or neighbour — not the target building. Clear it so the GPS-scale
+                # centred rectangle fallback fires instead.
+                if result.footprint.contour_points:
+                    pts = result.footprint.contour_points
+                    cent_x = sum(p[0] for p in pts) / len(pts)
+                    cent_y = sum(p[1] for p in pts) / len(pts)
+                    dist = ((cent_x - 320.0) ** 2 + (cent_y - 320.0) ** 2) ** 0.5
+                    max_dist = (320.0 ** 2 + 320.0 ** 2) ** 0.5
+                    centrality = 1.0 - dist / max_dist
+                    if centrality < 0.5:
+                        result.footprint = result.footprint.model_copy(
+                            update={"contour_points": []}
+                        )
             else:
                 result.errors.append("Footprint extraction found no building contour")
+
+        # Phase 4b: Image annotations (display-only, never affects BER calculation)
+        if result.satellite_image_path and result.footprint:
+            try:
+                draw_footprint_overlay(
+                    result.satellite_image_path,
+                    result.footprint,
+                    self.output_dir / "satellite_annotated.jpg",
+                    lat=coords.lat,
+                    zoom=satellite_zoom,
+                )
+            except Exception as e:
+                result.errors.append(f"Satellite annotation failed: {e}")
+
+        if sv_paths:
+            try:
+                window_lists = await asyncio.gather(
+                    *[detect_windows(p) for p in sv_paths],
+                    return_exceptions=True,
+                )
+                for sv_path, wins in zip(sv_paths, window_lists):
+                    if isinstance(wins, Exception) or not wins:
+                        continue
+                    draw_window_boxes(
+                        sv_path,
+                        wins,
+                        sv_path.parent / f"{sv_path.stem}_annotated.jpg",
+                    )
+            except Exception as e:
+                result.errors.append(f"Window annotation failed: {e}")
 
         # Phase 5: Build inputs and calculate BER
         try:
@@ -222,7 +291,10 @@ class BERPipeline:
             streetview_image_path=existing_result.streetview_image_path,
         )
 
-        sv_paths = sorted((self.output_dir / "streetview").glob("streetview_*.jpg"))
+        sv_paths = sorted(
+            p for p in (self.output_dir / "streetview").glob("streetview_*.jpg")
+            if "_annotated" not in p.name
+        )
 
         return await self._run_vision_and_calc(
             result, coords, sv_paths, country, retrofit, overrides,
