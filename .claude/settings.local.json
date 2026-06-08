@@ -35,7 +35,11 @@
       "Bash(.venv/Scripts/pip.exe show *)",
       "PowerShell(& \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\.venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\create_presentation.py\" 2>&1)",
       "PowerShell(& \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\.venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\add_notes.py\" 2>&1)",
-      "PowerShell(& \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\.venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\verify_notes.py\" 2>&1)"
+      "PowerShell(& \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\.venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\verify_notes.py\" 2>&1)",
+      "Bash(envScriptspython -c ' *)",
+      "Bash(env/Scripts/python.exe -c ' *)",
+      "PowerShell(& \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\.venv\\\\Scripts\\\\pip.exe\" install python-docx -q)",
+      "PowerShell(& \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\.venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\nagar\\\\PyCharmProjects\\\\BERAutomation\\\\Redon\\\\update_guide.py\")"
     ]
   }
 }
