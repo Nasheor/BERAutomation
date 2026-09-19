@@ -204,11 +204,71 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 - Prompt includes explicit visibility check: instructs Claude to set confidence <= 0.1
   when no building facade is visible (trees, hedges, obstructions)
 
+### Heating System Default — Location-Aware (Sept 2026)
+- `analyze_streetview(image_paths, country, location=None)`: the pipeline passes
+  `coords.formatted_address` as `location`; the prompt gains a "Property Location" block.
+  `reanalyse()` goes through the same call.
+- Prompt rule when no heating indicator is visible (meters, flues and oil tanks are usually
+  hidden, so *not seeing one is not evidence*):
+  - estate/street within or on the edge of a city or large town → `gas_boiler`, any age
+  - one-off house in open countryside, farmhouse, small village → `oil_boiler`
+  - Claude is told not to speculate about whether mains gas reached the estate
+- Replaced the old rule "gas for 2000+ builds, oil for older rural buildings", which made
+  Claude call Cork city suburbs rural (it never saw the address) and guess oil.
+
+### Sampling Temperature
+- `Settings.claude_temperature: float | None = 0.0`, applied to all three vision calls
+  (`analyze_streetview`, `analyze_satellite`, `detect_windows`) via `_sampling_kwargs()`.
+- Set `CLAUDE_TEMPERATURE=none` in `.env` to omit the parameter — required if
+  `claude_model` is moved to a model that rejects sampling params (Opus 4.7+, Sonnet 5).
+- Effect: classification outputs (type, storeys, epoch, heating) are identical across
+  repeat runs on the same images; footprint width still wobbles between a few values.
+
+## Daft Validation (`scripts/validate_daft.py`)
+
+`tests/Daft/1–5.xlsx` are copies of the Kaiser Excel tool filled in by a human assessor
+for five Cork Eircodes. They hold the assessor's inputs and the Excel outputs — **not**
+listed BER certificates. "Assessor BER" below = `HWBCalculator` on the assessor's inputs.
+
+```
+python scripts/validate_daft.py --offline   # Part A only, no API calls
+python scripts/validate_daft.py --runs 3    # Part A + live pipeline, 3 vision runs per property
+```
+Run 1 fetches images; runs 2+ use `reanalyse()` on the same images, so differences between
+runs are model variance only. Output: `output/daft_validation/report.json` (+ per-Eircode
+`result*.json` and images).
+
+**Part A — calculator parity vs Excel:** all five within 0.12% on every output
+(useful/final energy, hot water, CO2). Residual differences come from hand-entered
+per-orientation window areas that do not sum exactly to the total.
+
+**Part B — pipeline vs assessor (2026-09-19, temperature 0, 3 runs each):**
+
+| Eircode | Type | Footprint area | Storeys | Epoch | Heating | BER assessor → pipeline |
+|---|---|---|---|---|---|---|
+| T23 HYW6 | wrong side (length vs width) | +52% | ok | one band newer | ok | B2 → B1 |
+| T23 RK10 | ok | +25…+44% | ok | one band newer | oil (assessor: gas) | B2 → B1 |
+| T12 K7AC | ok | −2…+12% | ok | ok | ok | A3 → A3 |
+| T23 AX03 | terraced (assessor: semi-d) | +125…+132% | ok | ok | ok | B1 → A3 |
+| T12 TP3C | ok | +30% | ok | one band newer | ok | B1 → B1 |
+
+- Storeys 5/5, heating 4/5 (was 1/5 before the location-aware rule), type 3/5, epoch 3/5,
+  BER band exact 2/5, within one band 4/5.
+- **Footprint is the dominant error and looks anchored, not measured:** `analyze_satellite`
+  returned length 10.5 m for 4 of 5 properties (assessor: 9.0, 9.5, 5.6, 9.0) and widths from
+  a small set (6.0 / 6.8 / 7.8), with confidence 0.75–1.0 every time — so the 0.4 confidence
+  gate filters nothing. T23 AX03 is measured ~2 units wide and `_correct_terrace_footprint()`
+  does not correct it.
+- **Epoch bias:** all three 1980–1990 houses are read as 1990–2000 (PVC replacement windows
+  make older estates look newer).
+- n = 5, one city: treat as directional, not statistical.
+
 ### Test Coverage
-- 53 tests total (34 original + 14 vision + 3 streetview multi-image + 2 confidence gating)
+- 77 tests total
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — valid response, malformed JSON, out-of-bounds clamping (mocked async Claude API)
-  - `analyze_streetview()` — single image backward-compat, multi-image (4 views sent), malformed JSON defaults
+  - `analyze_streetview()` — single image backward-compat, multi-image (4 views sent), malformed JSON defaults,
+    `location` in the prompt only when given, `claude_temperature` sent only when set
   - `_reconcile_footprints()` — agreement boost, disagreement, Claude fallback, both fail, low confidence
   - `_build_input()` — high/low confidence, unreasonable area, clamping, no footprint, overrides,
     high-confidence street analysis used, low-confidence street analysis ignored

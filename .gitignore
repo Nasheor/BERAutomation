@@ -6,6 +6,10 @@ __pycache__/
 .venv/
 venv/
 env/
+# `env` as a plain file holds API keys (a copy of .env)
+/env
+# pipeline and validation output (fetched images, reports)
+output/
 *.egg-info/
 dist/
 build/
