@@ -30,6 +30,13 @@ COUNTRY_NAMES: dict[Country, str] = {
     Country.AUSTRIA: "Austrian",
 }
 
+
+def _sampling_kwargs(settings) -> dict:
+    """Sampling params for messages.create(); empty when the temperature setting is unset."""
+    temperature = settings.claude_temperature
+    return {"temperature": temperature} if isinstance(temperature, (int, float)) else {}
+
+
 _ANALYSIS_BODY = """
 {
   "construction_epoch": one of ["before_1980", "1980_1990", "1990_2000", "2000_2010", "after_2010"],
@@ -68,7 +75,12 @@ Only set confidence above 0.5 if you can clearly see architectural features (wal
 - Heat pump (air source): large external fan unit (box-shaped, often on side/rear wall)
 - District heating: no boiler or tank visible, pipe connections at ground level
 - Biomass: woodchip/pellet storage, larger flue
-- If no clear indicator, default to gas_boiler for 2000+ builds, oil_boiler for older rural buildings; district_heating is common in urban Luxembourg, Netherlands and Germany
+- Gas meters, boilers and oil tanks are usually hidden from the street, so NOT seeing one is not evidence for or against any system
+- If no clear indicator is visible, apply this rule from the setting (use the Property Location when given, otherwise the surroundings) — do not speculate about whether mains gas had reached the street or estate:
+  - Housing estate or street within, or on the edge of, a city or large town: gas_boiler, whatever the building age
+  - One-off house in open countryside, farmhouse, or small village: oil_boiler
+  - district_heating is common in urban Luxembourg, Netherlands and Germany
+- A suburb or townland name does not make a location rural: if the address names a city or large town, treat the property as urban, including peripheral estates
 
 ## Building Type
 - Detached: standalone, no shared walls
@@ -86,7 +98,15 @@ Only set confidence above 0.5 if you can clearly see architectural features (wal
 Return ONLY the JSON object, no other text."""
 
 
-def _build_streetview_prompt(country_adj: str, multi: bool) -> str:
+def _build_streetview_prompt(country_adj: str, multi: bool, location: str | None = None) -> str:
+    # The images alone rarely show whether a street is urban or rural; the geocoded
+    # address does, and that drives the heating-system default.
+    location_block = (
+        f"## Property Location\nGeocoded address: {location}\n"
+        f"Use this to judge whether the property is in a city/town (mains gas likely) "
+        f"or a rural area.\n\n"
+        if location else ""
+    )
     if multi:
         return (
             f"You are an expert building surveyor analysing a {country_adj} residential building "
@@ -96,13 +116,15 @@ def _build_streetview_prompt(country_adj: str, multi: bool) -> str:
             f"Look for details that may only be visible from certain angles (e.g. an oil "
             f"tank at the side, a heat pump at the rear, a shared wall only visible from "
             f"the side).\n\n"
-            f"Analyse these images and return a JSON object with the following fields:"
+            + location_block
+            + "Analyse these images and return a JSON object with the following fields:"
             + _ANALYSIS_BODY
         )
     return (
         f"You are an expert building surveyor analysing a {country_adj} residential building "
         f"from a Google Street View image.\n\n"
-        f"Analyse this image and return a JSON object with the following fields:"
+        + location_block
+        + "Analyse this image and return a JSON object with the following fields:"
         + _ANALYSIS_BODY
     )
 
@@ -110,6 +132,7 @@ def _build_streetview_prompt(country_adj: str, multi: bool) -> str:
 async def analyze_streetview(
     image_paths: str | Path | list[str | Path],
     country: Country | None = None,
+    location: str | None = None,
 ) -> StreetViewAnalysis:
     """Send Street View image(s) to Claude Vision for building analysis.
 
@@ -120,6 +143,8 @@ async def analyze_streetview(
     Args:
         image_paths: Path (or list of paths) to Street View image file(s).
         country: Country context for the prompt (defaults to Ireland).
+        location: Geocoded address, used for urban/rural context when no
+            heating system is visible.
 
     Returns:
         StreetViewAnalysis with building classification and confidence.
@@ -152,7 +177,9 @@ async def analyze_streetview(
 
     # Choose prompt based on single vs multi-image
     country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
-    prompt_text = _build_streetview_prompt(country_adj, multi=len(image_paths) > 1)
+    prompt_text = _build_streetview_prompt(
+        country_adj, multi=len(image_paths) > 1, location=location,
+    )
     content.append({"type": "text", "text": prompt_text})
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -160,6 +187,7 @@ async def analyze_streetview(
     message = await client.messages.create(
         model=settings.claude_model,
         max_tokens=1024,
+        **_sampling_kwargs(settings),
         messages=[{"role": "user", "content": content}],
     )
 
@@ -325,6 +353,7 @@ async def analyze_satellite(
     message = await client.messages.create(
         model=settings.claude_model,
         max_tokens=1024,
+        **_sampling_kwargs(settings),
         messages=[
             {
                 "role": "user",
@@ -455,6 +484,7 @@ async def detect_windows(image_path: str | Path) -> list[dict]:
         message = await client.messages.create(
             model=settings.claude_model,
             max_tokens=1024,
+            **_sampling_kwargs(settings),
             messages=[{
                 "role": "user",
                 "content": [

@@ -192,6 +192,54 @@ class TestAnalyzeStreetview:
         assert result.construction_epoch.value == "before_1980"
         assert result.building_type.value == "detached"
 
+    @pytest.mark.asyncio
+    async def test_location_included_in_prompt(self, tmp_path):
+        """The geocoded address is passed to Claude for urban/rural heating context."""
+        img = tmp_path / "streetview.jpg"
+        img.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+
+        mock_settings, mock_anthropic = _make_mock_anthropic(json.dumps({
+            "construction_epoch": "1980_1990",
+            "building_type": "semi_d_length",
+            "heating_system_guess": "gas_boiler",
+            "confidence": 0.7,
+        }))
+
+        address = "Ballinlough, Cork, Co. Cork, T12 TP3C, Ireland"
+        with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings), \
+             patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
+            from ber_automation.vision.claude_analyzer import analyze_streetview
+            await analyze_streetview(str(img), location=address)
+            create = mock_anthropic.AsyncAnthropic.return_value.messages.create
+            with_location = create.call_args.kwargs["messages"][0]["content"][-1]["text"]
+
+            await analyze_streetview(str(img))
+            without_location = create.call_args.kwargs["messages"][0]["content"][-1]["text"]
+
+        assert address in with_location
+        assert "Property Location" not in without_location.split("## CRITICAL")[0]
+
+    @pytest.mark.asyncio
+    async def test_temperature_setting_passed_only_when_set(self, tmp_path):
+        """claude_temperature is sent to the API when set and omitted when None."""
+        img = tmp_path / "streetview.jpg"
+        img.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+
+        mock_settings, mock_anthropic = _make_mock_anthropic(json.dumps({"confidence": 0.7}))
+        create = mock_anthropic.AsyncAnthropic.return_value.messages.create
+
+        with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings), \
+             patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
+            from ber_automation.vision.claude_analyzer import analyze_streetview
+
+            mock_settings.claude_temperature = 0.0
+            await analyze_streetview(str(img))
+            assert create.call_args.kwargs["temperature"] == 0.0
+
+            mock_settings.claude_temperature = None
+            await analyze_streetview(str(img))
+            assert "temperature" not in create.call_args.kwargs
+
 
 # ---------------------------------------------------------------------------
 # _reconcile_footprints() tests

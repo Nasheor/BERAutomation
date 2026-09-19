@@ -12,6 +12,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        env_parse_none_str="none",
     )
 
     google_maps_api_key: str = ""
@@ -27,6 +28,10 @@ class Settings(BaseSettings):
 
     # Claude Vision model
     claude_model: str = "claude-sonnet-4-5-20250929"
+    # 0 keeps vision output as repeatable as possible between runs. Set
+    # CLAUDE_TEMPERATURE=none to omit it — newer models (Opus 4.7+, Sonnet 5) reject
+    # sampling parameters.
+    claude_temperature: float | None = 0.0
 
     # Default building assumptions
     default_storey_height: float = 3.0  # meters

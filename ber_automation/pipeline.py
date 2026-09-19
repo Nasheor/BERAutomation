@@ -122,7 +122,10 @@ class BERPipeline:
         # Phase 3: Street view analysis (before satellite to inform footprint)
         if sv_paths:
             try:
-                analysis = await analyze_streetview(sv_paths, country=country)
+                analysis = await analyze_streetview(
+                    sv_paths, country=country,
+                    location=coords.formatted_address or None,
+                )
                 result.street_analysis = analysis
             except Exception as e:
                 result.errors.append(f"Claude analysis failed: {e}")
