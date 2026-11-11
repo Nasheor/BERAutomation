@@ -236,12 +236,16 @@ class BERPipeline:
         if sv_paths:
             for sv_path in sv_paths:
                 (sv_path.parent / f"{sv_path.stem}_annotated.jpg").unlink(missing_ok=True)
+            # Only the front view (streetview_0, camera pointed at the address) shows the
+            # target building; the other three headings look along or across the street
+            # at other buildings, so windows found there are never the property's.
+            front_views = [p for p in sv_paths if p.stem == "streetview_0"]
             try:
                 window_lists = await asyncio.gather(
-                    *[detect_windows(p) for p in sv_paths],
+                    *[detect_windows(p) for p in front_views],
                     return_exceptions=True,
                 )
-                for sv_path, wins in zip(sv_paths, window_lists):
+                for sv_path, wins in zip(front_views, window_lists):
                     if isinstance(wins, Exception) or not wins:
                         continue
                     draw_window_boxes(

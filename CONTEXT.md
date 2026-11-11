@@ -212,6 +212,21 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   preserved for fallback/testing
 - Returns: construction epoch, building type, storeys, heating system guess, confidence
 - Used in Phase 4, feeds into `_build_input()` for non-geometric parameters
+- **The 4 views are one camera turned 4 ways, not 4 sides of the house.** Only
+  `streetview_0` (heading camera → address) shows the property; the others look along or
+  across the street at other buildings. The classification prompt still describes them as
+  "angles around the building" ("heat pump at the rear") — likely misleads type/era; not yet
+  changed (Nov 2026).
+
+### Window Detection (`detect_windows()`, display only)
+- Runs on the **front view only** (`streetview_0`); the other headings never show the property.
+  1 Claude call per property instead of 4.
+- Prompt: target = building at the horizontal image centre. Claude returns
+  `{"target_visible", "facade_x1", "facade_x2", "windows": [...]}`; windows whose centre is
+  outside the facade x-range (neighbours) are dropped, and `target_visible: false` (privacy
+  blur, hedge, van) → no windows. A bare JSON list reply is still accepted.
+- T23 HYW6's house is privacy-blurred by Google → 0 windows (correct). Before Nov 2026 all
+  boxes for it were on neighbours. Small windows (e.g. beside a porch) are sometimes missed.
 
 ### Claude API Client (async fix)
 - Both `analyze_satellite()` and `analyze_streetview()` now use `anthropic.AsyncAnthropic`
@@ -319,7 +334,7 @@ Reports: `report_before_footprint_fix.json` (Sept), `report.json` (this run).
   (assessor: 1) and oil; RK10 type unstable across runs.
 
 ### Test Coverage
-- 84 tests total (`tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 87 tests total (`tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0),

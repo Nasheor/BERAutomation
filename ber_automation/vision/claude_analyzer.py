@@ -581,14 +581,19 @@ async def analyze_satellite(
 
 
 async def detect_windows(image_path: str | Path) -> list[dict]:
-    """Send a Street View image to Claude Vision to detect window bounding boxes.
+    """Detect the windows of the target building in a front Street View image.
+
+    The image must be the view pointed at the property (heading camera → address):
+    the target is the building at the horizontal centre. Claude also returns the
+    target facade's x-range; windows outside it (neighbours) are discarded.
 
     Args:
-        image_path: Path to the street view image file.
+        image_path: Path to the front street view image file.
 
     Returns:
-        List of {"x1", "y1", "x2", "y2"} dicts (pixel coords) for each visible
-        window. Returns [] if no windows found or on any error.
+        List of {"x1", "y1", "x2", "y2"} dicts (pixel coords) for each window on
+        the target facade. Returns [] if the target is blurred/hidden, no windows
+        are found, or on any error.
     """
     from PIL import Image  # local import — PIL is guaranteed by streamlit
 
@@ -614,28 +619,28 @@ async def detect_windows(image_path: str | Path) -> list[dict]:
     except Exception:
         img_w, img_h = 640, 640
 
+    cx = img_w // 2
     prompt = (
         f"You are analysing a Google Street View photograph ({img_w}×{img_h} pixels).\n"
-        f"Your task: identify windows on the residential building facade visible in this image.\n\n"
-        f"## Mark ONLY these (windows on building walls):\n"
-        f"- Rectangular glass panes set into building walls\n"
-        f"- Window frames and glazing that are clearly part of a wall surface\n"
-        f"- Both upper-floor and ground-floor windows\n\n"
-        f"## Do NOT mark:\n"
-        f"- Sky, clouds, or any area at or above the building roofline\n"
-        f"- Trees, vegetation, hedges\n"
-        f"- Parked cars, vans, motorcycles, or any vehicles\n"
-        f"- Road surfaces, pavements, gutters\n"
-        f"- Doors, solid walls, or fences with no glass\n"
-        f"- Shop fronts or commercial display glass (unless the building is clearly residential)\n"
-        f"- Distant buildings in the background — only mark the main foreground building\n"
-        f"- Any area you are uncertain about\n\n"
-        f"## Rules:\n"
-        f"- Every window box must be entirely below the roofline of the building\n"
-        f"- Boxes must sit inside the wall — not in the sky or on the ground\n"
-        f"- If no building facade with clear windows is visible, return []\n\n"
-        f"Return ONLY a JSON array, one entry per window (no other text):\n"
-        f'[{{"x1": int, "y1": int, "x2": int, "y2": int}}, ...]\n\n'
+        f"The camera is pointed at the property being assessed, so the TARGET building is the "
+        f"building at the horizontal centre of the image (around x = {cx}). Buildings to the "
+        f"left and right of it are neighbours.\n\n"
+        f"Your task: mark the windows on the TARGET building's facade only.\n\n"
+        f"## Step 1 — find the target building\n"
+        f"- Give the left and right edges of the target building's facade in pixels "
+        f"(facade_x1, facade_x2). For a semi-detached or terraced home, use the party-wall "
+        f"lines, so the neighbouring home is outside the range.\n"
+        f"- Google blurs some homes for privacy. If the target facade is blurred, hidden "
+        f"(trees, hedges, vehicles) or not in the image, set target_visible to false and "
+        f"return no windows. Do NOT mark a neighbour's windows instead.\n\n"
+        f"## Step 2 — mark its windows\n"
+        f"- Rectangular glass panes set into the target building's walls, upper and ground floor\n"
+        f"- Do NOT mark: neighbouring or background buildings, doors, shop fronts, vehicles, "
+        f"sky, trees, or anything you are unsure about\n"
+        f"- Every box must sit inside the wall, below the roofline\n\n"
+        f"Return ONLY a JSON object (no other text):\n"
+        f'{{"target_visible": true or false, "facade_x1": int, "facade_x2": int, '
+        f'"windows": [{{"x1": int, "y1": int, "x2": int, "y2": int}}, ...]}}\n\n'
         f"Image coordinates: (0,0) is the top-left pixel, ({img_w},{img_h}) is the bottom-right."
     )
 
@@ -666,6 +671,16 @@ async def detect_windows(image_path: str | Path) -> list[dict]:
             lines = response_text.split("\n")
             response_text = "\n".join(lines[1:-1])
         parsed = json.loads(response_text)
+        facade: tuple[int, int] | None = None
+        if isinstance(parsed, dict):
+            if not parsed.get("target_visible", True):
+                return []
+            try:
+                fx1, fx2 = int(parsed["facade_x1"]), int(parsed["facade_x2"])
+                facade = (min(fx1, fx2), max(fx1, fx2))
+            except (KeyError, TypeError, ValueError):
+                facade = None
+            parsed = parsed.get("windows") or []
         if not isinstance(parsed, list):
             return []
 
@@ -693,6 +708,9 @@ async def detect_windows(image_path: str | Path) -> list[dict]:
             # Filter: aspect ratio — windows are roughly 0.2–5× wide-to-tall
             aspect = bw / bh
             if aspect < 0.2 or aspect > 5.0:
+                continue
+            # Filter: window centre must lie on the target facade (drops neighbours)
+            if facade is not None and not (facade[0] <= (x1 + x2) / 2 <= facade[1]):
                 continue
             windows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
         return windows
