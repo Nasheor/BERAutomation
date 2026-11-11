@@ -127,6 +127,44 @@ async def fetch_streetview_image(
     return output_path
 
 
+async def _streetview_metadata(client: httpx.AsyncClient, location: str, key: str) -> dict:
+    """Metadata for the nearest Google outdoor panorama, else the nearest panorama of any kind.
+
+    ``source=outdoor`` excludes user-contributed photos, which are often not full 360°
+    panoramas: the API returns the nearest edge for headings outside them, so several
+    headings come back as the same picture.
+    """
+    for extra in ({"source": "outdoor"}, {}):
+        resp = await client.get(
+            STREETVIEW_META_URL, params={"location": location, "key": key, **extra},
+        )
+        resp.raise_for_status()
+        meta = resp.json()
+        if meta.get("status") == "OK":
+            return meta
+    return meta
+
+
+def _near_duplicate(a: Path, b: Path, threshold: float = 4.0) -> bool:
+    """True when two images are (almost) the same picture.
+
+    Compares 64x64 greyscale thumbnails; *threshold* is the mean absolute pixel
+    difference (0-255). Views 90° apart differ by far more than this.
+    """
+    from PIL import Image, ImageChops, ImageStat
+
+    with Image.open(a) as ia, Image.open(b) as ib:
+        ta = ia.convert("L").resize((64, 64))
+        tb = ib.convert("L").resize((64, 64))
+    return ImageStat.Stat(ImageChops.difference(ta, tb)).mean[0] < threshold
+
+
+def _clear_streetview_dir(output_dir: Path) -> None:
+    """Remove images (and their window overlays) from a previous property."""
+    for old in output_dir.glob("streetview_*.jpg"):
+        old.unlink(missing_ok=True)
+
+
 async def fetch_streetview_images(
     coords: Coordinates,
     output_dir: str | Path,
@@ -137,7 +175,9 @@ async def fetch_streetview_images(
     """Download Street View images at 4 headings (every 90 degrees) around *coords*.
 
     The base heading is auto-computed from camera position → building, then
-    images are fetched at base+0, base+90, base+180, base+270.
+    images are fetched at base+0, base+90, base+180, base+270. All four come from
+    the same panorama (by ``pano_id``), and near-duplicate views are dropped so
+    Claude is never shown the same picture twice.
 
     Args:
         coords: GPS coordinates of the building.
@@ -147,24 +187,20 @@ async def fetch_streetview_images(
         size: Image size as "WxH".
 
     Returns:
-        List of Paths to saved images (may be fewer than 4 if Street View
-        is unavailable).
+        List of Paths to saved images (fewer than 4 if Street View is unavailable
+        or some headings returned duplicate pictures).
     """
     settings = get_settings()
     if not settings.google_maps_api_key:
         raise ValueError("GOOGLE_MAPS_API_KEY not configured")
 
     location = f"{coords.lat},{coords.lng}"
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _clear_streetview_dir(output_dir)
 
-    # Check availability and get camera position
-    meta_params = {
-        "location": location,
-        "key": settings.google_maps_api_key,
-    }
     async with httpx.AsyncClient(timeout=10.0) as client:
-        meta_resp = await client.get(STREETVIEW_META_URL, params=meta_params)
-        meta_resp.raise_for_status()
-        meta = meta_resp.json()
+        meta = await _streetview_metadata(client, location, settings.google_maps_api_key)
 
     if meta.get("status") != "OK":
         return []
@@ -176,14 +212,15 @@ async def fetch_streetview_images(
     else:
         base_heading = 0.0
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Pin every view to the panorama the heading was computed from
+    pano_id = meta.get("pano_id")
+    where = {"pano": pano_id} if pano_id else {"location": location}
 
     headings = [(base_heading + offset) % 360 for offset in (0, 90, 180, 270)]
 
     async def _fetch_one(heading: float, index: int) -> Path:
         params = {
-            "location": location,
+            **where,
             "heading": heading,
             "fov": fov or settings.streetview_fov,
             "pitch": pitch or settings.streetview_pitch,
@@ -202,6 +239,10 @@ async def fetch_streetview_images(
 
     paths: list[Path] = []
     for r in results:
-        if isinstance(r, Path):
-            paths.append(r)
+        if not isinstance(r, Path):
+            continue
+        if any(_near_duplicate(r, kept) for kept in paths):
+            r.unlink(missing_ok=True)
+            continue
+        paths.append(r)
     return paths

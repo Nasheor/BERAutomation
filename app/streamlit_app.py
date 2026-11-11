@@ -1140,7 +1140,12 @@ if mode == "Full Pipeline":
                     if row_imgs:
                         cols = st.columns(2)
                         for i, img_p in enumerate(row_imgs):
-                            idx = offset + i
+                            # Label by the file's heading index, not list position:
+                            # duplicate views are dropped, so positions can shift.
+                            try:
+                                idx = int(img_p.stem.split("_")[1])
+                            except (IndexError, ValueError):
+                                idx = offset + i
                             label = labels[idx] if idx < len(labels) else f"View {idx}"
                             with cols[i]:
                                 ann = img_p.parent / f"{img_p.stem}_annotated.jpg"

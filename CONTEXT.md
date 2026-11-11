@@ -197,6 +197,14 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 - **All images sent in one Claude request**: Claude cross-references front/right/rear/left
   views to identify features only visible from certain angles (oil tanks, heat pumps,
   shared walls, gas meters)
+- **One panorama, no duplicates (Nov 2026)**: metadata is requested with `source=outdoor`
+  (Google's own 360° panoramas; falls back to any panorama), and all 4 views are fetched by
+  that `pano_id`. Views that are near-duplicates of an earlier one (64×64 greyscale mean diff
+  < 4) are deleted, so fewer than 4 can come back. Old `streetview_*` files and overlays are
+  cleared before each fetch, and each view's `_annotated` overlay is removed before window
+  detection. Cause of the app screenshot `images/output.png`, where Front = Right and Rear =
+  Left: user-contributed partial panoramas return the nearest edge for out-of-range headings.
+  The app captions views by file index (`streetview_2` = Rear) because positions can shift.
 - **Backward-compatible**: accepts a single path (str/Path) or a list of paths
 - **Async client**: uses `anthropic.AsyncAnthropic` (not the synchronous client) to avoid
   blocking the event loop
@@ -311,7 +319,7 @@ Reports: `report_before_footprint_fix.json` (Sept), `report.json` (this run).
   (assessor: 1) and oil; RK10 type unstable across runs.
 
 ### Test Coverage
-- 80 tests total
+- 84 tests total (`tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0),

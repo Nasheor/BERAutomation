@@ -234,6 +234,8 @@ class BERPipeline:
                 result.errors.append(f"Satellite annotation failed: {e}")
 
         if sv_paths:
+            for sv_path in sv_paths:
+                (sv_path.parent / f"{sv_path.stem}_annotated.jpg").unlink(missing_ok=True)
             try:
                 window_lists = await asyncio.gather(
                     *[detect_windows(p) for p in sv_paths],
