@@ -9,7 +9,9 @@ from pathlib import Path
 import anthropic
 
 from ber_automation.config import get_settings
-from ber_automation.geospatial.scale import meters_per_pixel
+import math
+
+from ber_automation.geospatial.scale import satellite_meters_per_pixel
 from ber_automation.models import (
     BuildingType,
     Country,
@@ -29,6 +31,24 @@ COUNTRY_NAMES: dict[Country, str] = {
     Country.SWITZERLAND: "Swiss",
     Country.AUSTRIA: "Austrian",
 }
+
+
+def _image_size(image_path: Path) -> tuple[int, int]:
+    """(width, height) of an image file; falls back to 640x640 if it cannot be read."""
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            return img.size
+    except Exception:
+        return 640, 640
+
+
+def _response_text(message) -> str:
+    """Concatenated text blocks of a response, skipping thinking blocks."""
+    return "".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    ).strip()
 
 
 def _sampling_kwargs(settings) -> dict:
@@ -186,13 +206,13 @@ async def analyze_streetview(
 
     message = await client.messages.create(
         model=settings.claude_model,
-        max_tokens=1024,
+        max_tokens=16000,
         **_sampling_kwargs(settings),
         messages=[{"role": "user", "content": content}],
     )
 
     # Parse response
-    response_text = message.content[0].text.strip()
+    response_text = _response_text(message)
 
     # Handle potential markdown code blocks
     if response_text.startswith("```"):
@@ -288,6 +308,105 @@ Return ONLY a JSON object:
 }}"""
 
 
+SATELLITE_CORNERS_PROMPT = """You are an expert building surveyor analysing a satellite image of a {country_adj} residential property.
+
+Your task: outline the roof of the building that contains the target home, in pixel coordinates, \
+and count the homes in it. Do NOT estimate dimensions in metres — they are computed from your \
+corners using the known scale.
+
+## Image Geometry
+- The image is {img_w} x {img_h} pixels. Pixel (0, 0) is the top-left corner; x grows to the right, y grows downwards.
+- The image is centred on the property's geocoded address point, pixel ({cx}, {cy}). The target \
+home is in the residential building at or nearest to this point. Geocoded points can land on the \
+road or garden in front of the house, so pick the nearest house roof, not a road or a car.
+- Scale: {mpp:.4f} metres per pixel (the image covers about {ground_w:.0f}m x {ground_h:.0f}m). \
+A single {country_adj} home is typically 5–10 m wide along the street ({px_unit_lo:.0f}–{px_unit_hi:.0f} px) \
+and 7–11 m deep ({px_depth_lo:.0f}–{px_depth_hi:.0f} px).
+
+## Instructions
+1. Find the roof of the building containing the target home (slate, tile, flat felt). IGNORE \
+gardens, driveways, sheds, cars, tree canopies, roads, paths and hedgerows.
+2. Outline the WHOLE attached building as one rectangle: a detached house on its own, both halves \
+of a semi-detached pair, or the full terrace row up to the first gap between buildings (if the row \
+runs off the image, stop at the image edge). It is easier to see the outer edges of a block than \
+the party walls inside it, so outline the block — do not try to cut out one home.
+3. Count the homes in that rectangle ("units_in_block"): use repeating chimneys, roof windows, \
+ridge steps or colour changes in the roof, and the front doors/paths/driveways below. 1 for a \
+detached house, 2 for a semi-detached pair.
+4. Give the 4 corners in order around the perimeter (clockwise). The rectangle may be \
+rotated — give the true corners, not an axis-aligned box.
+5. If the building is L-shaped or irregular, outline its main rectangular part.
+
+## Response Format
+Return ONLY a JSON object:
+{{
+  "block_corners_px": [[x1, y1], [x2, y2], [x3, y3], [x4, y4]],
+  "units_in_block": <integer >= 1>,
+  "building_shape": "rectangular" or "l_shaped" or "irregular",
+  "confidence": <float 0-1: how sure you are that you outlined the right building, that its edges \
+are clearly visible and that the home count is right; use <= 0.3 if the roof is hidden by trees \
+or shadow>,
+  "reasoning": "<brief explanation: which building you picked, how you found its edges and how you counted the homes>"
+}}"""
+
+
+def _lerp(a: tuple[float, float], b: tuple[float, float], t: float) -> tuple[float, float]:
+    return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+
+
+def _unit_from_block(
+    corners: list, units: int, mpp: float, centre: tuple[float, float],
+) -> tuple[float, float, list[list[int]]] | None:
+    """Split a block outline into equal homes along its longer edge.
+
+    The per-home area is block area / units whichever edge is divided; homes in a pair
+    or row are almost always lined up along the block's longer side, so that edge is
+    divided. The slice nearest *centre* (the geocoded point) is returned for drawing.
+
+    Args:
+        corners: 4 [x, y] pixel corners around the block's perimeter.
+        units: Number of homes in the block (>= 1).
+        mpp: Metres per pixel.
+        centre: Pixel position of the geocoded address point.
+
+    Returns:
+        (length_m, width_m, unit_corners_px) for one home, or None if the corners
+        are invalid.
+    """
+    try:
+        pts = [(float(p[0]), float(p[1])) for p in corners]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if len(pts) != 4:
+        return None
+    c1, c2, c3, c4 = pts
+    edge_a = (math.dist(c1, c2) + math.dist(c4, c3)) / 2
+    edge_b = (math.dist(c2, c3) + math.dist(c1, c4)) / 2
+    if edge_a <= 0 or edge_b <= 0:
+        return None
+    if edge_b > edge_a:  # rotate so that c1 -> c2 is the longer edge
+        c1, c2, c3, c4 = c2, c3, c4, c1
+        edge_a, edge_b = edge_b, edge_a
+
+    units = max(1, min(units, 20))
+    slices = []
+    for k in range(units):
+        t0, t1 = k / units, (k + 1) / units
+        slices.append([_lerp(c1, c2, t0), _lerp(c1, c2, t1), _lerp(c4, c3, t1), _lerp(c4, c3, t0)])
+    nearest = min(
+        slices,
+        key=lambda q: math.dist(centre, (sum(x for x, _ in q) / 4, sum(y for _, y in q) / 4)),
+    )
+
+    along_m = edge_a / units * mpp
+    depth_m = edge_b * mpp
+    return (
+        max(along_m, depth_m),
+        min(along_m, depth_m),
+        [[int(round(x)), int(round(y))] for x, y in nearest],
+    )
+
+
 async def analyze_satellite(
     image_path: str | Path,
     lat: float,
@@ -325,19 +444,41 @@ async def analyze_satellite(
     media_type = media_types.get(suffix, "image/jpeg")
 
     country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
+    mpp: float | None = None
     if zoom is not None:
-        mpp = meters_per_pixel(lat, zoom)
-        ground_w = 640 * mpp
-        ground_h = 640 * mpp
-        scale_paragraph = _GPS_SCALE_PARAGRAPH.format(mpp=mpp, ground_w=ground_w, ground_h=ground_h)
+        # GPS scale known: Claude marks roof corners in pixels; metres are computed here.
+        mpp = satellite_meters_per_pixel(lat, zoom)
+        img_w, img_h = _image_size(image_path)
+        prompt = SATELLITE_CORNERS_PROMPT.format(
+            country_adj=country_adj, img_w=img_w, img_h=img_h,
+            cx=img_w // 2, cy=img_h // 2, mpp=mpp,
+            ground_w=img_w * mpp, ground_h=img_h * mpp,
+            px_unit_lo=5 / mpp, px_unit_hi=10 / mpp,
+            px_depth_lo=7 / mpp, px_depth_hi=11 / mpp,
+        )
     else:
-        scale_paragraph = _VISUAL_REFERENCE_PARAGRAPH
-    prompt = SATELLITE_ANALYSIS_PROMPT.format(
-        country_adj=country_adj, scale_paragraph=scale_paragraph,
-    )
+        # Uploaded image, unknown scale: Claude estimates metres from visual references.
+        prompt = SATELLITE_ANALYSIS_PROMPT.format(
+            country_adj=country_adj, scale_paragraph=_VISUAL_REFERENCE_PARAGRAPH,
+        )
 
     # Inject building-type context from street view when available
-    if building_type and building_type.startswith(("terraced", "semi_d")):
+    if mpp is not None and building_type:
+        # Corner path: Claude outlines the whole block, so pass the street-level read as a
+        # hint for the home count rather than an instruction to cut out one unit.
+        kind = {
+            "detached": "a detached house",
+            "semi_d_length": "one half of a semi-detached pair",
+            "semi_d_width": "one half of a semi-detached pair",
+        }.get(building_type, "one home in a terrace")
+        units_hint = estimated_units_in_row or (1 if building_type == "detached" else None)
+        prompt += (
+            "\n\n## Hint from Street View (may be wrong — trust the roof you see)\n"
+            f"- From the street the target looked like {kind}"
+            + (f", in a building of about {units_hint} homes" if units_hint else "")
+            + "."
+        )
+    elif building_type and building_type.startswith(("terraced", "semi_d")):
         units = estimated_units_in_row or (2 if building_type.startswith("semi_d") else 4)
         side = adjacent_side or "length"
         prompt += (
@@ -352,7 +493,7 @@ async def analyze_satellite(
 
     message = await client.messages.create(
         model=settings.claude_model,
-        max_tokens=1024,
+        max_tokens=16000,
         **_sampling_kwargs(settings),
         messages=[
             {
@@ -375,7 +516,7 @@ async def analyze_satellite(
         ],
     )
 
-    response_text = message.content[0].text.strip()
+    response_text = _response_text(message)
 
     # Handle potential markdown code blocks
     if response_text.startswith("```"):
@@ -390,10 +531,29 @@ async def analyze_satellite(
             source="claude_vision",
         )
 
-    length = float(data.get("length_m", 0))
-    width = float(data.get("width_m", 0))
     confidence = float(data.get("confidence", 0))
     building_shape = data.get("building_shape", "rectangular")
+    contour_points: list[list[int]] = []
+
+    if mpp is not None:
+        corners = data.get("block_corners_px")
+        try:
+            units = int(data.get("units_in_block") or 1)
+        except (TypeError, ValueError):
+            units = 1
+        unit = (
+            _unit_from_block(corners, units, mpp, centre=(img_w / 2, img_h / 2))
+            if corners else None
+        )
+        if unit is None:
+            return FootprintResult(
+                length_m=0, width_m=0, area_m2=0, confidence=0,
+                source="claude_vision",
+            )
+        length, width, contour_points = unit
+    else:
+        length = float(data.get("length_m", 0))
+        width = float(data.get("width_m", 0))
 
     # Validate and clamp dimensions to reasonable Irish house bounds
     length = max(4.0, min(25.0, length))
@@ -416,6 +576,7 @@ async def analyze_satellite(
         confidence=round(min(1.0, confidence), 2),
         source="claude_vision",
         building_shape=building_shape,
+        contour_points=contour_points,
     )
 
 
@@ -483,7 +644,7 @@ async def detect_windows(image_path: str | Path) -> list[dict]:
     try:
         message = await client.messages.create(
             model=settings.claude_model,
-            max_tokens=1024,
+            max_tokens=16000,
             **_sampling_kwargs(settings),
             messages=[{
                 "role": "user",
@@ -500,7 +661,7 @@ async def detect_windows(image_path: str | Path) -> list[dict]:
                 ],
             }],
         )
-        response_text = message.content[0].text.strip()
+        response_text = _response_text(message)
         if response_text.startswith("```"):
             lines = response_text.split("\n")
             response_text = "\n".join(lines[1:-1])

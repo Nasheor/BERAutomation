@@ -27,11 +27,11 @@ class Settings(BaseSettings):
     streetview_size: str = "640x640"
 
     # Claude Vision model
-    claude_model: str = "claude-sonnet-4-5-20250929"
-    # 0 keeps vision output as repeatable as possible between runs. Set
-    # CLAUDE_TEMPERATURE=none to omit it — newer models (Opus 4.7+, Sonnet 5) reject
-    # sampling parameters.
-    claude_temperature: float | None = 0.0
+    claude_model: str = "claude-sonnet-5-5"
+    # Sampling temperature. None omits the parameter, which current models (Sonnet 5+,
+    # Opus 4.7+) require — they reject temperature with a 400. Only set a value (e.g.
+    # CLAUDE_TEMPERATURE=0) when claude_model is an older model that still accepts it.
+    claude_temperature: float | None = None
 
     # Default building assumptions
     default_storey_height: float = 3.0  # meters

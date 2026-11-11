@@ -22,8 +22,9 @@ from ber_automation.pipeline import BERPipeline
 def _make_mock_anthropic(response_text: str):
     """Build patched settings + AsyncAnthropic that returns *response_text*."""
     mock_response = MagicMock()
-    mock_response.content = [MagicMock()]
-    mock_response.content[0].text = response_text
+    thinking_block = MagicMock(type="thinking", thinking="")
+    text_block = MagicMock(type="text", text=response_text)
+    mock_response.content = [thinking_block, text_block]
 
     mock_settings = MagicMock()
     mock_settings.anthropic_api_key = "test-key"
@@ -46,8 +47,8 @@ class TestAnalyzeSatellite:
     """Test the Claude Vision satellite analysis function."""
 
     @pytest.mark.asyncio
-    async def test_valid_response(self, tmp_path):
-        """Valid Claude response produces correct FootprintResult."""
+    async def test_valid_response_uploaded_image(self, tmp_path):
+        """Uploaded image (no zoom): Claude's metre estimates are used directly."""
         img = tmp_path / "satellite.png"
         img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
@@ -62,7 +63,7 @@ class TestAnalyzeSatellite:
         with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings), \
              patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
             from ber_automation.vision.claude_analyzer import analyze_satellite
-            result = await analyze_satellite(str(img), lat=53.35, zoom=20)
+            result = await analyze_satellite(str(img), lat=53.35, zoom=None)
 
         assert result.length_m == 11.5
         assert result.width_m == 8.2
@@ -104,10 +105,69 @@ class TestAnalyzeSatellite:
         with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings), \
              patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
             from ber_automation.vision.claude_analyzer import analyze_satellite
-            result = await analyze_satellite(str(img), lat=53.35, zoom=20)
+            result = await analyze_satellite(str(img), lat=53.35, zoom=None)
 
         assert result.length_m == 25.0  # clamped from 50
         assert result.width_m == 4.0    # clamped from 2
+
+
+    @pytest.mark.asyncio
+    async def test_block_split_along_longer_edge(self, tmp_path):
+        """GPS path: the block is divided along its longer edge; the slice nearest the centre is drawn."""
+        from PIL import Image
+        from ber_automation.geospatial.scale import satellite_meters_per_pixel
+
+        img = tmp_path / "satellite.png"
+        Image.new("RGB", (640, 640)).save(img)
+        # Rotated block 180 px x 300 px, listed starting on the SHORT edge; 3 homes
+        block = [[340, 120], [448, 264], [208, 444], [100, 300]]
+        mock_settings, mock_anthropic = _make_mock_anthropic(json.dumps({
+            "block_corners_px": block,
+            "units_in_block": 3,
+            "building_shape": "rectangular",
+            "confidence": 0.7,
+            "reasoning": "Test",
+        }))
+
+        with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings), \
+             patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
+            from ber_automation.vision.claude_analyzer import analyze_satellite
+            result = await analyze_satellite(str(img), lat=53.35, zoom=20)
+
+        mpp = satellite_meters_per_pixel(53.35, 20)
+        assert result.length_m == round(180 * mpp, 1)   # depth
+        assert result.width_m == round(100 * mpp, 1)    # 300 px / 3 homes
+        # Middle third of the block: the slice containing the image centre
+        assert sorted(map(tuple, result.contour_points)) == [(180, 240), (260, 180), (288, 384), (368, 324)]
+        prompt = mock_anthropic.AsyncAnthropic.return_value.messages.create.call_args.kwargs[
+            "messages"][0]["content"][1]["text"]
+        assert "block_corners_px" in prompt
+        assert "(320, 320)" in prompt
+
+    @pytest.mark.asyncio
+    async def test_missing_corners_returns_zero_confidence(self, tmp_path):
+        """GPS path: a response without valid corners is rejected, not guessed."""
+        img = tmp_path / "satellite.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        mock_settings, mock_anthropic = _make_mock_anthropic(json.dumps({
+            "length_m": 10.0, "width_m": 8.0, "confidence": 0.9,
+            "block_corners_px": [[1, 2], [3, 4]],
+        }))
+
+        with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings),              patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
+            from ber_automation.vision.claude_analyzer import analyze_satellite
+            result = await analyze_satellite(str(img), lat=53.35, zoom=20)
+
+        assert result.confidence == 0
+
+
+def test_mapbox_scale_is_half_google_scale():
+    """Mapbox zoom Z uses 512 px tiles: half the metres per pixel of Google zoom Z."""
+    from ber_automation.geospatial.scale import meters_per_pixel, satellite_meters_per_pixel
+
+    assert satellite_meters_per_pixel(51.9, 20) == pytest.approx(meters_per_pixel(51.9, 20) / 2)
+    # Cork at zoom 20: a 4.5 m car spans ~98 px
+    assert satellite_meters_per_pixel(51.9, 20) == pytest.approx(0.046, abs=0.001)
 
 
 # ---------------------------------------------------------------------------
@@ -504,18 +564,32 @@ class TestBuildingContextInSatellitePrompt:
         with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings), \
              patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
             from ber_automation.vision.claude_analyzer import analyze_satellite
+            # Uploaded image (no zoom): Claude measures metres, so it is told to measure one unit
+            await analyze_satellite(
+                str(img), lat=53.35, zoom=None,
+                building_type="terraced_length",
+                adjacent_side="length",
+                estimated_units_in_row=4,
+            )
+            uploaded_prompt = mock_anthropic.AsyncAnthropic.return_value.messages.create.call_args.kwargs[
+                "messages"][0]["content"][1]["text"]
+
+            # GPS path: Claude outlines the whole block; street view is only a home-count hint
             await analyze_satellite(
                 str(img), lat=53.35, zoom=20,
                 building_type="terraced_length",
                 adjacent_side="length",
                 estimated_units_in_row=4,
             )
+            gps_prompt = mock_anthropic.AsyncAnthropic.return_value.messages.create.call_args.kwargs[
+                "messages"][0]["content"][1]["text"]
 
-        call_args = mock_anthropic.AsyncAnthropic.return_value.messages.create.call_args
-        prompt_text = call_args.kwargs["messages"][0]["content"][1]["text"]
-        assert "ONE unit" in prompt_text
-        assert "terraced row" in prompt_text
-        assert "4" in prompt_text
+        assert "ONE unit" in uploaded_prompt
+        assert "terraced row" in uploaded_prompt
+        assert "4" in uploaded_prompt
+        assert "Hint from Street View" in gps_prompt
+        assert "one home in a terrace, in a building of about 4 homes" in gps_prompt
+        assert "ONE unit" not in gps_prompt
 
     @pytest.mark.asyncio
     async def test_no_context_when_none(self, tmp_path):

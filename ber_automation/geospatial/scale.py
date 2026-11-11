@@ -10,8 +10,12 @@ EARTH_CIRCUMFERENCE = 40_075_016.686
 # Google Maps tile size in pixels
 TILE_SIZE = 256
 
+# Mapbox (GL / Static Images API) tile size in pixels. A Mapbox zoom level Z shows the
+# same ground area per pixel as Google zoom Z+1, i.e. half the metres per pixel.
+MAPBOX_TILE_SIZE = 512
 
-def meters_per_pixel(lat: float, zoom: int) -> float:
+
+def meters_per_pixel(lat: float, zoom: int, tile_size: int = TILE_SIZE) -> float:
     """Calculate the ground resolution (meters per pixel) at a given latitude and zoom.
 
     Uses the standard Web Mercator formula:
@@ -21,13 +25,20 @@ def meters_per_pixel(lat: float, zoom: int) -> float:
 
     Args:
         lat: Latitude in degrees.
-        zoom: Google Maps zoom level (0–21).
+        zoom: Map zoom level (0–22).
+        tile_size: Tile size of the map provider's zoom scheme — 256 for Google,
+            512 for Mapbox.
 
     Returns:
         Meters per pixel at the given location and zoom.
     """
     lat_rad = math.radians(lat)
-    return EARTH_CIRCUMFERENCE * math.cos(lat_rad) / (2 ** (zoom + 8))
+    return EARTH_CIRCUMFERENCE * math.cos(lat_rad) / (tile_size * 2 ** zoom)
+
+
+def satellite_meters_per_pixel(lat: float, zoom: int) -> float:
+    """Metres per pixel of an image from fetch_satellite_image() (Mapbox Static Images)."""
+    return meters_per_pixel(lat, zoom, tile_size=MAPBOX_TILE_SIZE)
 
 
 def pixels_to_meters(pixels: float, lat: float, zoom: int) -> float:

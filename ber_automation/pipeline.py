@@ -186,8 +186,10 @@ class BERPipeline:
                 # measured a similar shape (aspect ratio within ~2×). If they differ,
                 # OpenCV likely found a tree or other non-building feature; in that case
                 # draw_footprint_overlay falls back to a GPS-scale centered rectangle.
+                # Not needed when Claude returned its own roof corners (GPS-scale path).
                 if (
                     result.footprint.source == "claude_vision"
+                    and not result.footprint.contour_points
                     and opencv_fp is not None
                     and opencv_fp.contour_points
                     and opencv_fp.confidence >= 0.1
@@ -335,6 +337,7 @@ class BERPipeline:
                     confidence=round(boosted, 2),
                     source="claude_vision",
                     building_shape=claude_fp.building_shape,
+                    contour_points=claude_fp.contour_points,
                 )
             else:
                 # Disagreement: trust Claude
@@ -372,6 +375,10 @@ class BERPipeline:
             return footprint
         # Skip correction when confidence is too low
         if footprint.confidence < 0.4:
+            return footprint
+        # Claude outlined roof corners with an instruction to trace only the target
+        # unit, so the dimensions are already per-unit — dividing again would halve it.
+        if footprint.source == "claude_vision" and footprint.contour_points:
             return footprint
 
         length = footprint.length_m

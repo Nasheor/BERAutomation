@@ -143,12 +143,35 @@ CO2 = Final Energy * CO2_Factor
 
 The pipeline uses a two-tier approach to extract building dimensions from satellite imagery:
 
+**Scale — Mapbox, not Google (fixed Nov 2026)**
+- Satellite images come from the **Mapbox** Static Images API, which uses 512 px tiles: zoom Z
+  is half the metres/pixel of Google zoom Z. Use `geospatial/scale.py::satellite_meters_per_pixel()`
+  (≈0.046 m/px at zoom 20 in Cork; a 640 px image covers ~29 m). `meters_per_pixel()` with its
+  default 256 px tile is the Google scale.
+- Until Nov 2026 the code used the Google scale for Mapbox images: Claude was told the image
+  covered ~59 m, so every roof looked twice its real size. That was the main cause of the
+  anchored, oversized footprints in the Sept 2026 validation. OpenCV's size filter and the
+  overlay used the same wrong scale.
+
 **Primary: Claude Vision (`ber_automation/vision/claude_analyzer.py::analyze_satellite()`)**
-- Sends the satellite image to Claude with a structured prompt (`SATELLITE_ANALYSIS_PROMPT`)
-- Prompt includes computed scale (meters-per-pixel at given lat/zoom), ground coverage, and typical Irish house size ranges
-- Instructs Claude to identify the **building roof** and ignore gardens, driveways, fences, trees
+- **GPS path (zoom known — normal runs): `SATELLITE_CORNERS_PROMPT`.** Claude does *not* give
+  metres. It outlines the **whole attached block** (detached house / both halves of a semi-d /
+  terrace row up to the first gap) as 4 pixel corners (`block_corners_px`) and counts the homes
+  in it (`units_in_block`). `_unit_from_block()` divides the block's **longer** edge by the
+  count, converts to metres with the Mapbox scale, and returns the slice nearest the image centre
+  as `contour_points` (drawn as the green outline).
+  - Why the whole block: asked to outline one home, Claude outlined the whole pair/row anyway
+    (it finds outer edges reliably, party walls poorly).
+  - Why the longer edge rather than an edge Claude names: Claude mixed up the edge order; area per
+    home = block area / count whichever edge is split, and rows are nearly always longer than deep.
+  - Street View's type/units go in as a "hint (may be wrong)" for the home count.
+  - A reply without 4 valid corners → confidence 0 (OpenCV fallback), never a guess.
+- **Uploaded-image path (zoom=None): `SATELLITE_ANALYSIS_PROMPT`** — scale unknown, so Claude
+  estimates metres from cars, doors, bins etc. and is told to measure one unit.
 - Returns `FootprintResult` with `source="claude_vision"`
 - Validation: dimensions clamped to [4m, 25m], area sanity check [20, 500] m2
+- Known limit: a long block that runs off both ends of the image with no chimneys to count
+  (T23 AX03) → Claude gives confidence ≤ 0.3 and OpenCV is used. A zoom-19 image would help.
 
 **Secondary: OpenCV (`ber_automation/vision/footprint.py::extract_footprint()`)**
 - Canny edge detection + contour scoring (solidity, centrality, rectangularity, relative area)
@@ -216,13 +239,17 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 - Replaced the old rule "gas for 2000+ builds, oil for older rural buildings", which made
   Claude call Cork city suburbs rural (it never saw the address) and guess oil.
 
-### Sampling Temperature
-- `Settings.claude_temperature: float | None = 0.0`, applied to all three vision calls
-  (`analyze_streetview`, `analyze_satellite`, `detect_windows`) via `_sampling_kwargs()`.
-- Set `CLAUDE_TEMPERATURE=none` in `.env` to omit the parameter — required if
-  `claude_model` is moved to a model that rejects sampling params (Opus 4.7+, Sonnet 5).
-- Effect: classification outputs (type, storeys, epoch, heating) are identical across
-  repeat runs on the same images; footprint width still wobbles between a few values.
+### Model and Sampling (Nov 2026)
+- `Settings.claude_model = "claude-sonnet-5-5"`. `claude-sonnet-4-5-20250929` started returning
+  404 on this account in Nov 2026 (Sonnet 4.5 retires 2026-11-30).
+- Sonnet 5.5 rejects `temperature`, so `Settings.claude_temperature` now defaults to `None`
+  (parameter omitted). Set `CLAUDE_TEMPERATURE=0` only when pointing `claude_model` at an older
+  model that accepts it. Applied to all three vision calls via `_sampling_kwargs()`.
+- Sonnet 5.5 thinks by default: `max_tokens` is 16000 (was 1024) and replies are read with
+  `_response_text()`, which joins the `text` blocks and skips `thinking` blocks
+  (`message.content[0]` can be a thinking block).
+- Even without temperature 0, repeat runs on the same images mostly agree; T23 RK10 still
+  flips between detached and semi-d.
 
 ## Daft Validation (`scripts/validate_daft.py`)
 
@@ -263,10 +290,32 @@ per-orientation window areas that do not sum exactly to the total.
   make older estates look newer).
 - n = 5, one city: treat as directional, not statistical.
 
+**Part B — after the footprint fix (2026-11-11, Sonnet 5.5, 3 runs each):**
+Mapbox scale + block outline split by home count (see Footprint Extraction). The model also
+changed (Sonnet 4.5 → 5.5), so this is not a footprint-only comparison.
+Reports: `report_before_footprint_fix.json` (Sept), `report.json` (this run).
+
+| Eircode | Footprint source | Footprint area (Sept → now) | BER assessor → pipeline |
+|---|---|---|---|
+| T23 HYW6 | Claude | +52% → +48% | B2 → B1 |
+| T23 RK10 | Claude | +25…+44% → +25…+31% (one run −38%) | B2 → B1/B2 |
+| T12 K7AC | Claude | −2…+12% → +1…+3% | A3 → A3 |
+| T23 AX03 | OpenCV (Claude conf 0.3) | +125…+132% → +18% | B1 → A3 |
+| T12 TP3C | Claude | +30% → −13% | B1 → B1 |
+
+- BER within one band 5/5 (was 4/5); exact 2/5 (RK10 exact in 1 of 3 runs).
+- The remaining footprint error is the **home count**, not the measurement: HYW6's block is
+  17.3 × 9.1 m and Claude counts 2 homes; 3 would give 5.8 × 9.1 = 52 m² (assessor 54).
+- Claude's confidence now varies (0.4–0.65) instead of always 0.75–1.0.
+- Still open: epoch read one band newer for the 1980s houses; RK10 read as 2 storeys
+  (assessor: 1) and oil; RK10 type unstable across runs.
+
 ### Test Coverage
-- 77 tests total
+- 80 tests total
 - `tests/test_satellite_analysis.py` covers:
-  - `analyze_satellite()` — valid response, malformed JSON, out-of-bounds clamping (mocked async Claude API)
+  - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
+    along the longer edge into the slice nearest the centre; missing corners → confidence 0),
+    malformed JSON, Mapbox scale = half the Google scale (mocked async Claude API)
   - `analyze_streetview()` — single image backward-compat, multi-image (4 views sent), malformed JSON defaults,
     `location` in the prompt only when given, `claude_temperature` sent only when set
   - `_reconcile_footprints()` — agreement boost, disagreement, Claude fallback, both fail, low confidence

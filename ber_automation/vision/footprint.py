@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ber_automation.geospatial.scale import meters_per_pixel
+from ber_automation.geospatial.scale import satellite_meters_per_pixel
 from ber_automation.models import FootprintResult
 
 
@@ -67,7 +67,7 @@ def extract_footprint(
         return FootprintResult(length_m=0, width_m=0, area_m2=0, confidence=0)
 
     # 5. Score contours
-    mpp = meters_per_pixel(lat, zoom)
+    mpp = satellite_meters_per_pixel(lat, zoom)
     min_side_px = 4.0 / mpp if mpp > 0 else 0  # 4m minimum side
     max_side_px = 25.0 / mpp if mpp > 0 else float("inf")  # 25m maximum side
 
@@ -194,12 +194,12 @@ def draw_footprint_overlay(
     if footprint.contour_points:
         pts = np.array(footprint.contour_points, dtype=np.int32)
         if len(pts) == 4:
-            # Claude bbox — 4 corners stored as [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
+            # Claude roof corners — may be rotated, so draw the quadrilateral itself
+            cv2.polylines(img, [pts], isClosed=True, color=GREEN, thickness=2)
             bx1 = int(pts[:, 0].min())
             by1 = int(pts[:, 1].min())
             bx2 = int(pts[:, 0].max())
             by2 = int(pts[:, 1].max())
-            cv2.rectangle(img, (bx1, by1), (bx2, by2), GREEN, 2)
             ann_x1, ann_y1, ann_x2, ann_y2 = bx1, by1, bx2, by2
         else:
             # OpenCV polygon
@@ -209,7 +209,7 @@ def draw_footprint_overlay(
 
     elif lat is not None and zoom is not None:
         # GPS-scale centered rectangle fallback
-        mpp = meters_per_pixel(lat, zoom)
+        mpp = satellite_meters_per_pixel(lat, zoom)
         length_px = int(footprint.length_m / mpp)
         width_px = int(footprint.width_m / mpp)
         cx, cy = img_w // 2, img_h // 2
