@@ -214,9 +214,12 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 - Used in Phase 4, feeds into `_build_input()` for non-geometric parameters
 - **The 4 views are one camera turned 4 ways, not 4 sides of the house.** Only
   `streetview_0` (heading camera → address) shows the property; the others look along or
-  across the street at other buildings. The classification prompt still describes them as
-  "angles around the building" ("heat pump at the rear") — likely misleads type/era; not yet
-  changed (Nov 2026).
+  across the street at other buildings. Since Nov 2026 each image is preceded by a text label
+  (`_view_label()`, by file index: "Image 1: FRONT — … target is the building at the centre",
+  others "street context, not the property"), and the multi-image prompt says so. If the
+  target is privacy-blurred, Claude estimates from the neighbours in the FRONT image with
+  confidence ≤ 0.5 — this lands at 0.40–0.45, just above the 0.4 gate in `_build_input()`;
+  below it, the defaults (detached, before_1980) would be used instead.
 
 ### Window Detection (`detect_windows()`, display only)
 - Runs on the **front view only** (`streetview_0`); the other headings never show the property.
@@ -330,8 +333,19 @@ Reports: `report_before_footprint_fix.json` (Sept), `report.json` (this run).
 - The remaining footprint error is the **home count**, not the measurement: HYW6's block is
   17.3 × 9.1 m and Claude counts 2 homes; 3 would give 5.8 × 9.1 = 52 m² (assessor 54).
 - Claude's confidence now varies (0.4–0.65) instead of always 0.75–1.0.
-- Still open: epoch read one band newer for the 1980s houses; RK10 read as 2 storeys
-  (assessor: 1) and oil; RK10 type unstable across runs.
+
+**Part B — after the front-view classification prompt (2026-11-11, 3 runs each):**
+Report: `report.json` (previous run kept as `report_after_footprint_fix.json`).
+- RK10's type is now semi-d in 3/3 runs (was detached in 2/3). Its footprint moved from
+  +25…+31% to −37%: the semi-d hint makes the satellite step split an 8 × 9 m block in two.
+- Everything else unchanged: HYW6 +47%, K7AC +1…+2%, AX03 +18% (OpenCV), TP3C −13% (one run +27%).
+- BER: within one band 5/5; exact 2/5 (K7AC, TP3C). RK10 is B1 in all runs (assessor B2).
+- Still open, with Claude's own reasons:
+  - Era one band newer for all three 1980s houses (PVC windows, concrete tiles read as 1990s).
+  - RK10 storeys: Claude sees a dormer bungalow with rooms in the roof and says 2; the
+    assessor used 1. Needs a rule for dormers (the Excel has no 1.5-storey option).
+  - RK10 heating: Claude calls Kilnamucky "a small rural locality" → oil; assessor: gas.
+  - HYW6: the property is privacy-blurred in Street View; type/era come from the neighbours.
 
 ### Test Coverage
 - 87 tests total (`tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)

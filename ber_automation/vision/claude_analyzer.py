@@ -129,13 +129,22 @@ def _build_streetview_prompt(country_adj: str, multi: bool, location: str | None
     )
     if multi:
         return (
-            f"You are an expert building surveyor analysing a {country_adj} residential building "
-            f"from multiple Google Street View images taken at different angles "
-            f"(approximately 90 degrees apart) around the same location.\n\n"
-            f"Cross-reference all views to build a complete picture of the building. "
-            f"Look for details that may only be visible from certain angles (e.g. an oil "
-            f"tank at the side, a heat pump at the rear, a shared wall only visible from "
-            f"the side).\n\n"
+            f"You are an expert building surveyor assessing a {country_adj} residential property "
+            f"from Google Street View.\n\n"
+            f"## How the images were taken\n"
+            f"All images come from ONE camera position in the street, turned to different "
+            f"headings. They are NOT views of different sides of the property.\n"
+            f"- The image labelled FRONT is pointed at the property: the TARGET is the building "
+            f"at its horizontal centre. Classify THAT building.\n"
+            f"- The other images look along or across the street. They show neighbouring and "
+            f"opposite buildings, not the property. Use them only as context: urban or rural "
+            f"setting, whether the target's row continues (an edge of the target may appear at "
+            f"the side of an adjacent heading), and the style of the estate. Never classify a "
+            f"building from these images as if it were the target.\n"
+            f"- Google sometimes blurs a property for privacy. If the target is blurred or hidden, "
+            f"say so in the reasoning, estimate from the immediate neighbours in the FRONT image "
+            f"(homes in one estate usually share era, type and storeys), and keep confidence at "
+            f"0.5 or below.\n\n"
             + location_block
             + "Analyse these images and return a JSON object with the following fields:"
             + _ANALYSIS_BODY
@@ -147,6 +156,23 @@ def _build_streetview_prompt(country_adj: str, multi: bool, location: str | None
         + "Analyse this image and return a JSON object with the following fields:"
         + _ANALYSIS_BODY
     )
+
+
+_VIEW_LABELS = {
+    0: "FRONT — camera pointed at the property; the target is the building at the centre.",
+    1: "Heading +90° from the property — street context, not the property.",
+    2: "Heading +180° (behind the camera) — the opposite side of the street, not the property.",
+    3: "Heading +270° from the property — street context, not the property.",
+}
+
+
+def _view_label(img_path: Path, position: int) -> str:
+    """Label for a Street View image, from its heading index (streetview_<i>) or position."""
+    try:
+        index = int(img_path.stem.split("_")[1])
+    except (IndexError, ValueError):
+        index = position
+    return f"Image {position + 1}: " + _VIEW_LABELS.get(index, "street context, not the property.")
 
 
 async def analyze_streetview(
@@ -180,12 +206,16 @@ async def analyze_streetview(
 
     media_types_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
 
-    # Build content blocks: one image block per file, then the text prompt
+    # Build content blocks: one image block per file (labelled by heading when there
+    # are several), then the text prompt
+    multi = len(image_paths) > 1
     content: list[dict] = []
     for idx, img_path in enumerate(image_paths):
         image_data = base64.standard_b64encode(img_path.read_bytes()).decode("utf-8")
         suffix = img_path.suffix.lower()
         media_type = media_types_map.get(suffix, "image/jpeg")
+        if multi:
+            content.append({"type": "text", "text": _view_label(img_path, idx)})
         content.append({
             "type": "image",
             "source": {
@@ -198,7 +228,7 @@ async def analyze_streetview(
     # Choose prompt based on single vs multi-image
     country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
     prompt_text = _build_streetview_prompt(
-        country_adj, multi=len(image_paths) > 1, location=location,
+        country_adj, multi=multi, location=location,
     )
     content.append({"type": "text", "text": prompt_text})
 

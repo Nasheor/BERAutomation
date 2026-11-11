@@ -235,6 +235,14 @@ class TestAnalyzeStreetview:
         image_blocks = [b for b in content_blocks if b["type"] == "image"]
         assert len(image_blocks) == 4
 
+        # Each image is preceded by a label; only the first is the property
+        labels = [content_blocks[i - 1]["text"] for i, b in enumerate(content_blocks) if b["type"] == "image"]
+        assert labels[0].startswith("Image 1: FRONT")
+        assert all("not the property" in label for label in labels[1:])
+        prompt = content_blocks[-1]["text"]
+        assert "ONE camera position" in prompt
+        assert "heat pump at the rear" not in prompt
+
     @pytest.mark.asyncio
     async def test_malformed_response_returns_defaults(self, tmp_path):
         """Malformed JSON from streetview analysis returns safe defaults."""
