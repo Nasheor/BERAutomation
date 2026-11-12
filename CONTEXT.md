@@ -499,7 +499,9 @@ GitHub Pages cannot host the tool (static pages only; the app needs a Python ser
 keys). It is deployed on Streamlit Community Cloud from the private repo.
 
 - **Source:** repo `Nasheor/BERAutomation`, branch `daft-validation`, main file
-  `app/streamlit_app.py`, Python 3.12. Pushing to the branch redeploys the app.
+  `app/streamlit_app.py`. Pushing to the branch redeploys the app. The first build ran on
+  Python 3.14 (the cloud default when 3.12 is not chosen under *Advanced settings*) and failed
+  because `Pillow<11` has no 3.14 build; the pin is now `<13`, so 3.12 to 3.14 all install.
 - **URL:** set when the app is created (record it here).
 - **Access:** the repo is private, so the app is private; only email addresses invited under
   the app's *Share* menu can open it. The free tier allows one private app. Every Full Pipeline
