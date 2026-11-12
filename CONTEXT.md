@@ -342,6 +342,13 @@ Report: `report.json` (previous run kept as `report_after_footprint_fix.json`).
 - BER: within one band 5/5; exact 2/5 (K7AC, TP3C). RK10 is B1 in all runs (assessor B2).
 - Still open, with Claude's own reasons:
   - Era one band newer for all three 1980s houses (PVC windows, concrete tiles read as 1990s).
+    Prompt fixes tried 2026-11-12 and reverted (no change, 3/3 runs still 1990s):
+    (1) list PVC/tiles as not-evidence + Irish period table + "tie -> older band";
+    (2) say 1980s/1990s look alike, add an `area_development` field.
+    Claude ignores the tie-break. Its own build-year ranges: HYW6 1985-98, RK10 1990-2005,
+    TP3C 1995-2005, AX03 1998-2008, K7AC 2000-08, so taking the lower bound fixes HYW6 only
+    and risks AX03. Next idea: a per-location prior from CSO Census 2022 Small Area
+    "year built" data. Reports: report_era_v1.json, report_era_v2.json.
   - RK10 storeys: Claude sees a dormer bungalow with rooms in the roof and says 2; the
     assessor used 1. Needs a rule for dormers (the Excel has no 1.5-storey option).
   - RK10 heating: Claude calls Kilnamucky "a small rural locality" → oil; assessor: gas.
