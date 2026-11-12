@@ -24,3 +24,5 @@ build/
 *~
 .DS_Store
 Thumbs.db
+# Streamlit secrets (API keys for local runs / pasting into Streamlit Cloud)
+.streamlit/secrets.toml

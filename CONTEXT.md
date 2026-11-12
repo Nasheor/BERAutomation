@@ -492,3 +492,40 @@ Report: `report.json` (previous: `report_census_units.json`).
   - `_reconcile_footprints()` — agreement boost, disagreement, Claude fallback, both fail, low confidence
   - `_build_input()` — high/low confidence, unreasonable area, clamping, no footprint, overrides,
     high-confidence street analysis used, low-confidence street analysis ignored
+
+## Deployment (Streamlit Community Cloud, invite-only)
+
+GitHub Pages cannot host the tool (static pages only; the app needs a Python server and API
+keys). It is deployed on Streamlit Community Cloud from the private repo.
+
+- **Source:** repo `Nasheor/BERAutomation`, branch `daft-validation`, main file
+  `app/streamlit_app.py`, Python 3.12. Pushing to the branch redeploys the app.
+- **URL:** set when the app is created (record it here).
+- **Access:** the repo is private, so the app is private; only email addresses invited under
+  the app's *Share* menu can open it. The free tier allows one private app. Every Full Pipeline
+  run spends Anthropic, Google and Mapbox credit on the keys below.
+- **Keys:** `GOOGLE_MAPS_API_KEY`, `MAPBOX_ACCESS_TOKEN`, `ANTHROPIC_API_KEY` are pasted into the
+  app's *Secrets* as TOML. Streamlit Cloud exposes them as environment variables, which
+  `Settings` reads (no `.env` on the server). `.streamlit/secrets.toml` is the local,
+  git-ignored copy to paste from; regenerate it from `.env` if a key changes, and update the
+  app's Secrets too.
+- **Build inputs:** `requirements.txt`; `packages.txt` (apt) holds only `libglib2.0-0`.
+  `libgl1-mesa-glx` was removed: it no longer exists on current Debian images and
+  `opencv-python-headless` does not need it. If a build reports a missing GL library, add
+  `libgl1`.
+- **Imports:** the app adds the repo root to `sys.path`, so `ber_automation` is always the copy
+  next to `app/`, whatever folder Streamlit starts in. (An older copy of the project exists at
+  `F:\Circus\BERAutomation`; starting Streamlit there used its old `.env` key and June code.)
+- **Server files:** images and overlays are written to `output/` on the app's disk, which is
+  temporary and shared by everyone using the app.
+
+## Planned Work
+
+- **Mistral as a second, user-selectable vision model, and the paper** (AI estimate versus
+  official BER): full plan in `docs/plans/mistral_provider_and_paper_plan.md` (saved
+  2026-11-12, not implemented). It covers the provider switch (`providers.py`, `_complete()`
+  in `claude_analyzer.py`, `--provider` flags, app selector), the paper's research questions
+  and study design (official BERs from listings + SEAI register, about 250 homes, census-only
+  baseline, HWB-versus-DEAP error separated from perception error), and target venues with
+  dates (SBE27 Delft abstract due 18 Dec 2026).
+- Waiting on supervisor feedback on the deployed tool before starting.

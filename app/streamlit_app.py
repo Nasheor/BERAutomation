@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import plotly.graph_objects as go
 import streamlit as st
+
+# The app lives in app/ and imports ber_automation from the repo root: put that root first
+# on the path so the code next to this file is used, whatever folder Streamlit starts in.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ber_automation.ber_engine.calculator import HWBCalculator
 from ber_automation.ber_engine.constants import BER_BANDS
