@@ -502,7 +502,8 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
   `app/streamlit_app.py`. Pushing to the branch redeploys the app. The first build ran on
   Python 3.14 (the cloud default when 3.12 is not chosen under *Advanced settings*) and failed
   because `Pillow<11` has no 3.14 build; the pin is now `<13`, so 3.12 to 3.14 all install.
-- **URL:** set when the app is created (record it here).
+- **URL:** https://berautomation-iw3xyejivxips5ebhzzm5c.streamlit.app/ (live since 2026-11-12;
+  a Full Pipeline run of `T12 K7AC` completed).
 - **Access:** the repo is private, so the app is private; only email addresses invited under
   the app's *Share* menu can open it. The free tier allows one private app. Every Full Pipeline
   run spends Anthropic, Google and Mapbox credit on the keys below.
