@@ -287,6 +287,43 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 - T23 HYW6's house is privacy-blurred by Google → 0 windows (correct). Before Nov 2026 all
   boxes for it were on neighbours. Small windows (e.g. beside a porch) are sometimes missed.
 
+### House Description and Similar House (`describe_house()`, display only, Nov 2026)
+- **Why:** the front view often shows the property side-on or behind a hedge (T12 E9X2: a
+  tall hedge hides the ground floor and door), while another heading, or the same image,
+  shows a neighbour built to the same design in full.
+- `describe_house(sv_paths, analysis, country, location)` sends the same labelled images in
+  a **separate request** and returns a `HouseDescription` (stored on
+  `PipelineResult.house_description`): `target_view` (`front` / `side` / `partial` /
+  `hidden`), the similar house (`similar_house_view` = heading index of its image,
+  `similar_house_x1/x2` = its facade's x-range), `inferred_from_similar` (details not seen
+  on the target and taken from that house) and a short `description`. The classification
+  is passed in as context; the description says so when the images contradict it (T23 RK10:
+  "1-1.5 storey, not the 2 storeys given earlier").
+- **Nothing here feeds the calculation.** A first version put this task inside the
+  `analyze_streetview()` prompt. That flipped T23 RK10 from semi-detached (correct) to
+  detached, 4 runs of 4 against 4 of 4 with the old prompt on the same images: the house
+  is joined to its neighbour only by a low garage link, and the old prompt already called
+  the pairing uncertain (confidence 0.4). The classification prompt is therefore unchanged
+  (a test asserts it does not mention `similar_house`), and using the similar house for
+  type, storeys or era is left until there is a sample large enough to measure it.
+- Claude has to be told to report the similar house **whenever one is visible**. Asked to
+  do it only "when the facade is not fully visible", it skipped it for E9X2 ("the hedge
+  hides only the lower ground floor ... a similar house is not needed").
+- `HouseDescription.uses_similar_house`: a similar house was found and either the front
+  view is not `front` or something was inferred from it. Only then are its windows marked:
+  `detect_windows(path, facade_hint=(x1, x2))` names the house by x-range instead of "the
+  building at the centre", and `draw_window_boxes(..., color=SIMILAR_WINDOW_COLOR,
+  title="Similar house")` draws them in orange (the property's stay cyan), on top of the
+  front view's own boxes when the similar house is a neighbour in that image.
+  `PipelineResult.similar_house_windows` is the count.
+- Timing: the description request starts right after the classification and runs alongside
+  the satellite analysis; the similar-house windows run alongside the front-view windows.
+  Claude image calls per property: 3 → 4, or 5 when a similar house is used.
+- App: "Description" and a note under *AI Building Analysis* ("The front image shows the
+  house partly hidden. From a house of the same design in the Rear image, the AI took: ...
+  This is for the description only; it does not change the rating."); the similar house's
+  image is captioned "similar house (orange boxes)".
+
 ### Claude API Client (async fix)
 - Both `analyze_satellite()` and `analyze_streetview()` now use `anthropic.AsyncAnthropic`
   with `await client.messages.create(...)`, fixing the previous event-loop-blocking bug
@@ -478,8 +515,33 @@ Report: `report.json` (previous: `report_census_units.json`).
   rejected. For a clipped block those dimensions are not measured; not passing them is a
   possible next step (untested).
 
+### Part B — with the house description step (2026-11-12, 3 runs each)
+
+Report: `report.json` (previous: `report_edge_guard.json`). The description is display
+only, so this run checks that the rating inputs did not move.
+
+| Eircode | Type, storeys, era | Footprint area (before → now) | BER assessor → pipeline | Front view / similar house |
+|---|---|---|---|---|
+| T23 HYW6 | unchanged | −1…−2% → −2% | B2 → B2 | partial (blurred) / house in the Left image, 6 windows marked |
+| T23 RK10 | unchanged (semi-d, 2 storeys) | +25…+29% → +26…+29% | B2 → B1 | front / neighbour in the Front image (door and porch, 2 runs of 3) |
+| T12 K7AC | unchanged | +3…+5% → +4…+5% | A3 → A3 | front / pair opposite, nothing inferred |
+| T23 AX03 | unchanged | +18% → +18% | B1 → A3 | partial in 2 runs (car, hedge) / row in the Left image, no windows found on it |
+| T12 TP3C | unchanged | −3%, +27%, −3% → +27% ×3 | B1 → B1 | front / neighbour in the Front image, nothing inferred |
+
+- BER exact 3/5 (HYW6, K7AC, TP3C), within one band 5/5: the same as before.
+- Building type, storeys, era and heating are the same in all 15 runs as in the previous
+  report.
+- **TP3C's footprint is worse in this run, for the reason already listed as open:** OpenCV
+  confidence was 0.38 in all 3 runs (before: 0.9, 0.38, 1.0), under the 0.4 gate, so the
+  10 × 8 m default was used each time. The satellite path is not touched by this change.
+  Footprint mean |error| (median run) is therefore 16 % in this run against 11 % before.
+- The first version of this change (similar house inside the classification prompt) was
+  also run: it gave RK10 as detached in 3 runs of 3. Its band then matched the assessor
+  (B2) only because the wrong type offset the wrong storey count. That version was dropped.
+- The descriptions run to 7–9 sentences although the prompt asks for 3 to 5.
+
 ### Test Coverage
-- 121 tests total (`tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 135 tests total (`tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0;

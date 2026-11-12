@@ -299,17 +299,25 @@ def _draw_dimension_annotations(
     cv2.putText(img, v_label, (label_tx, label_ty_v), FONT, FONT_SCALE, WHITE, FONT_THICK)
 
 
+WINDOW_COLOR = (255, 255, 0)            # BGR cyan: windows of the property itself
+SIMILAR_WINDOW_COLOR = (0, 165, 255)    # BGR orange: windows of a similar house
+
+
 def draw_window_boxes(
     image_path: str | Path,
     windows: list[dict],
     output_path: str | Path,
+    color: tuple[int, int, int] = WINDOW_COLOR,
+    title: str | None = None,
 ) -> Path:
     """Draw window bounding boxes on a street view image.
 
     Args:
-        image_path: Original street view image.
+        image_path: Street view image to draw on (may already carry other boxes).
         windows: List of {"x1", "y1", "x2", "y2"} pixel-coordinate dicts.
         output_path: Path to save the annotated image.
+        color: BGR colour of the boxes.
+        title: Optional short label drawn above the boxes (e.g. "Similar house").
 
     Returns:
         Path to the saved overlay image.
@@ -318,8 +326,7 @@ def draw_window_boxes(
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {image_path}")
 
-    # BGR cyan = (255, 255, 0)
-    CYAN = (255, 255, 0)
+    CYAN = color
     FONT = cv2.FONT_HERSHEY_SIMPLEX
 
     # Semi-transparent fill pass
@@ -336,6 +343,16 @@ def draw_window_boxes(
         (tw, th), _ = cv2.getTextSize(label, FONT, 0.4, 1)
         cv2.rectangle(img, (x1 + 2, y1 + 2), (x1 + tw + 6, y1 + th + 6), (20, 20, 20), -1)
         cv2.putText(img, label, (x1 + 4, y1 + th + 3), FONT, 0.4, (255, 255, 255), 1)
+
+    # Title above the group of boxes, kept inside the image
+    if title and windows:
+        (tw, th), _ = cv2.getTextSize(title, FONT, 0.5, 1)
+        left = min(w["x1"] for w in windows)
+        top = min(w["y1"] for w in windows)
+        tx = max(2, min(left, img.shape[1] - tw - 8))
+        ty = max(th + 8, top - 8)
+        cv2.rectangle(img, (tx, ty - th - 6), (tx + tw + 6, ty + 4), color, -1)
+        cv2.putText(img, title, (tx + 3, ty - 1), FONT, 0.5, (20, 20, 20), 1)
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

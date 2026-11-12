@@ -24,12 +24,23 @@ from ber_automation.models import (
     Coordinates,
     Country,
     FootprintResult,
+    HouseDescription,
     PipelineResult,
     RetrofitInput,
     StreetViewAnalysis,
 )
-from ber_automation.vision.claude_analyzer import analyze_satellite, analyze_streetview, detect_windows
-from ber_automation.vision.footprint import draw_footprint_overlay, draw_window_boxes, extract_footprint
+from ber_automation.vision.claude_analyzer import (
+    analyze_satellite,
+    analyze_streetview,
+    describe_house,
+    detect_windows,
+)
+from ber_automation.vision.footprint import (
+    SIMILAR_WINDOW_COLOR,
+    draw_footprint_overlay,
+    draw_window_boxes,
+    extract_footprint,
+)
 
 
 class BERPipeline:
@@ -140,6 +151,17 @@ class BERPipeline:
         if not isinstance(census_area, Exception):
             result.census = census_area
 
+        # Description of the house (display only), started now so it runs alongside the
+        # satellite analysis. It is a separate request from the classification above so
+        # that it cannot change the inputs of the rating.
+        description_task = (
+            asyncio.ensure_future(describe_house(
+                sv_paths, analysis=result.street_analysis, country=country,
+                location=coords.formatted_address or None,
+            ))
+            if sv_paths else None
+        )
+
         # Phase 4: Footprint extraction (Claude Vision primary, OpenCV fallback)
         if result.satellite_image_path:
             claude_fp = None
@@ -246,6 +268,12 @@ class BERPipeline:
             except Exception as e:
                 result.errors.append(f"Satellite annotation failed: {e}")
 
+        if description_task is not None:
+            try:
+                result.house_description = await description_task
+            except Exception as e:
+                result.errors.append(f"House description failed: {e}")
+
         if sv_paths:
             for sv_path in sv_paths:
                 (sv_path.parent / f"{sv_path.stem}_annotated.jpg").unlink(missing_ok=True)
@@ -253,11 +281,16 @@ class BERPipeline:
             # target building; the other three headings look along or across the street
             # at other buildings, so windows found there are never the property's.
             front_views = [p for p in sv_paths if p.stem == "streetview_0"]
+            # When part of the property is hidden or side-on and Claude filled it in from
+            # a house of the same design in one of the views, that house's windows are
+            # marked too, in another colour, so the reader sees what the description
+            # was based on.
+            similar = self._similar_house_view(result.house_description, sv_paths)
             try:
-                window_lists = await asyncio.gather(
-                    *[detect_windows(p) for p in front_views],
-                    return_exceptions=True,
-                )
+                jobs = [detect_windows(p) for p in front_views]
+                if similar:
+                    jobs.append(detect_windows(similar[0], facade_hint=similar[1]))
+                window_lists = await asyncio.gather(*jobs, return_exceptions=True)
                 for sv_path, wins in zip(front_views, window_lists):
                     if isinstance(wins, Exception) or not wins:
                         continue
@@ -266,6 +299,18 @@ class BERPipeline:
                         wins,
                         sv_path.parent / f"{sv_path.stem}_annotated.jpg",
                     )
+                if similar:
+                    sim_path, wins = similar[0], window_lists[-1]
+                    if not isinstance(wins, Exception) and wins:
+                        annotated = sim_path.parent / f"{sim_path.stem}_annotated.jpg"
+                        draw_window_boxes(
+                            annotated if annotated.exists() else sim_path,
+                            wins,
+                            annotated,
+                            color=SIMILAR_WINDOW_COLOR,
+                            title="Similar house",
+                        )
+                        result.similar_house_windows = len(wins)
             except Exception as e:
                 result.errors.append(f"Window annotation failed: {e}")
 
@@ -324,6 +369,22 @@ class BERPipeline:
             result, coords, sv_paths, country, retrofit, overrides,
             satellite_zoom=None if satellite_uploaded else 20,
         )
+
+    @staticmethod
+    def _similar_house_view(
+        described: HouseDescription | None,
+        sv_paths: list[Path],
+    ) -> tuple[Path, tuple[int, int]] | None:
+        """Image and facade x-range of the similar house Claude used, if it used one."""
+        if described is None or not described.uses_similar_house:
+            return None
+        if described.similar_house_x1 is None or described.similar_house_x2 is None:
+            return None
+        name = f"streetview_{described.similar_house_view}"
+        for path in sv_paths:
+            if path.stem == name:
+                return path, (described.similar_house_x1, described.similar_house_x2)
+        return None
 
     @staticmethod
     def _reconcile_footprints(

@@ -20,6 +20,7 @@ from ber_automation.models import (
     ConstructionEpoch,
     FootprintResult,
     HeatingSystem,
+    HouseDescription,
     StreetViewAnalysis,
 )
 
@@ -291,6 +292,184 @@ async def analyze_streetview(
         heating_observed=data.get("heating_observed") is True,
         confidence=data.get("confidence", 0.5),
         reasoning=data.get("reasoning", ""),
+    )
+
+
+TARGET_VIEWS = ("front", "side", "partial", "hidden")
+MIN_SIMILAR_FACADE_PX = 30
+
+_DESCRIPTION_BODY = """
+## Task
+1. Say what the FRONT image shows of the target (target_view).
+2. Homes in one estate or row are usually built to the same design. Look through ALL the images, including the street-context ones, for the clearest house of the same design as the target, and report it as similar_house whenever one is visible:
+   - Same design means the same roof form and covering, wall finish, number of storeys, proportions and chimney position as whatever IS visible of the target. Prefer a house in the target's own row, then its nearest neighbours, then the houses opposite. If nothing of the target is visible, the house must be an immediate neighbour or directly opposite.
+   - Use it to fill in whatever is hidden or unclear on the target (a ground floor behind a hedge or wall, the front door and porch, a house seen only side-on, a blurred house). Describe those parts from the similar house instead of calling them "not visible", and list each one in inferred_from_similar. Whatever you can see on the target itself always wins.
+   - Owners alter houses one at a time: extensions, solar panels, replacement windows and heating equipment on the similar house say nothing about the target. Do not carry them over.
+3. Describe the target house.
+
+Return ONLY a JSON object, no other text:
+{
+  "target_view": one of ["front", "side", "partial", "hidden"] ("front" = the target's street facade, clearly; "side" = only a gable or side wall; "partial" = the facade, partly hidden by a hedge, wall, tree or vehicle; "hidden" = blurred or not visible),
+  "similar_house": null, or {"image": image number (1 if there is only one image), "x1": int, "x2": int} (the left and right pixel edges of that house's facade in that image; never the target itself; null only when no house of the same design is visible in any image),
+  "inferred_from_similar": list of short phrases naming the details you could not see on the target and took from the similar house (e.g. "ground-floor windows", "front door and porch"); [] when similar_house is null or everything was seen on the target,
+  "description": "3 to 5 short, plain sentences (no more) describing the TARGET house: wall finish, roof, windows on each floor (how many, frame type), door or porch, extensions. Say which details you saw on the target and which you assumed from the similar house"
+}"""
+
+
+def _build_description_prompt(
+    country_adj: str,
+    multi: bool,
+    location: str | None = None,
+    analysis: StreetViewAnalysis | None = None,
+) -> str:
+    if multi:
+        views = (
+            "## How the images were taken\n"
+            "All images come from ONE camera position in the street, turned to different "
+            "headings. They are NOT views of different sides of the property.\n"
+            "- The image labelled FRONT is pointed at the property: the TARGET is the building "
+            "at its horizontal centre.\n"
+            "- The other images look along or across the street. They show neighbouring and "
+            "opposite buildings, not the property.\n"
+        )
+    else:
+        views = (
+            "## The image\n"
+            "The camera is pointed at the property: the TARGET is the building at the "
+            "horizontal centre. Other buildings in the image are neighbours.\n"
+        )
+    location_block = f"\n## Property Location\nGeocoded address: {location}\n" if location else ""
+    classified = (
+        f"\n## Earlier classification\n"
+        f"An earlier step classified the target as {analysis.building_type.value}, "
+        f"{analysis.estimated_storeys} storey(s), built {analysis.construction_epoch.value}. "
+        f"Describe what you see; if the images clearly contradict this, say so in the "
+        f"description.\n"
+        if analysis is not None else ""
+    )
+    return (
+        f"You are an expert building surveyor. Describe a home from Google Street View for "
+        f"an energy assessment. Housing stock: {country_adj}.\n\n"
+        + views + location_block + classified + _DESCRIPTION_BODY
+    )
+
+
+def _view_index(img_path: Path, position: int) -> int:
+    """Heading index of a Street View image (streetview_<i>), else its list position."""
+    try:
+        return int(img_path.stem.split("_")[1])
+    except (IndexError, ValueError):
+        return position
+
+
+def _parse_similar_house(
+    raw, image_paths: list[Path],
+) -> tuple[int | None, int | None, int | None]:
+    """(heading index, x1, x2) of the similar house Claude reported, or three Nones.
+
+    Claude names the image by its number in the request (1-based); that is mapped back to
+    the file's heading index. A range that is missing, outside the image or too narrow to
+    be a facade is rejected.
+    """
+    if not isinstance(raw, dict):
+        return None, None, None
+    try:
+        position = int(raw["image"]) - 1
+        x1, x2 = sorted((int(raw["x1"]), int(raw["x2"])))
+    except (KeyError, TypeError, ValueError):
+        return None, None, None
+    if not 0 <= position < len(image_paths):
+        return None, None, None
+    img_w, _ = _image_size(image_paths[position])
+    x1, x2 = max(0, x1), min(img_w, x2)
+    if x2 - x1 < MIN_SIMILAR_FACADE_PX:
+        return None, None, None
+    return _view_index(image_paths[position], position), x1, x2
+
+
+async def describe_house(
+    image_paths: str | Path | list[str | Path],
+    analysis: StreetViewAnalysis | None = None,
+    country: Country | None = None,
+    location: str | None = None,
+) -> HouseDescription | None:
+    """Describe the target house, filling hidden parts from a house of the same design.
+
+    The front Street View image often shows the property side-on or behind a hedge, while
+    another heading shows a neighbour built to the same design in full. This asks Claude
+    for a plain description of the target and for the similar house it used. It is kept
+    apart from analyze_streetview() on purpose: that prompt decides building type, storeys
+    and era for the rating, and adding this task to it changed a borderline classification
+    (T23 RK10, semi-detached to detached). Nothing returned here feeds the calculation.
+
+    Args:
+        image_paths: Path (or list of paths) to the Street View image file(s).
+        analysis: The classification from analyze_streetview(), given as context.
+        country: Country context for the prompt (defaults to Ireland).
+        location: Geocoded address.
+
+    Returns:
+        HouseDescription, or None when the reply could not be read.
+    """
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        raise ValueError("ANTHROPIC_API_KEY not configured")
+
+    if isinstance(image_paths, (str, Path)):
+        image_paths = [image_paths]
+    image_paths = [Path(p) for p in image_paths]
+    media_types_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+
+    multi = len(image_paths) > 1
+    content: list[dict] = []
+    for idx, img_path in enumerate(image_paths):
+        image_data = base64.standard_b64encode(img_path.read_bytes()).decode("utf-8")
+        if multi:
+            content.append({"type": "text", "text": _view_label(img_path, idx)})
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_types_map.get(img_path.suffix.lower(), "image/jpeg"),
+                "data": image_data,
+            },
+        })
+    country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
+    content.append({
+        "type": "text",
+        "text": _build_description_prompt(country_adj, multi, location, analysis),
+    })
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    message = await client.messages.create(
+        model=settings.claude_model,
+        max_tokens=16000,
+        **_sampling_kwargs(settings),
+        messages=[{"role": "user", "content": content}],
+    )
+    response_text = _response_text(message)
+    if response_text.startswith("```"):
+        response_text = "\n".join(response_text.split("\n")[1:-1])
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    target_view = data.get("target_view")
+    if target_view not in TARGET_VIEWS:
+        target_view = "front"
+    view, x1, x2 = _parse_similar_house(data.get("similar_house"), image_paths)
+    inferred = data.get("inferred_from_similar")
+    inferred = [str(item) for item in inferred] if isinstance(inferred, list) else []
+    return HouseDescription(
+        target_view=target_view,
+        similar_house_view=view,
+        similar_house_x1=x1,
+        similar_house_x2=x2,
+        inferred_from_similar=inferred if view is not None else [],
+        description=str(data.get("description") or ""),
     )
 
 
@@ -680,15 +859,22 @@ async def analyze_satellite(
     )
 
 
-async def detect_windows(image_path: str | Path) -> list[dict]:
-    """Detect the windows of the target building in a front Street View image.
+async def detect_windows(
+    image_path: str | Path,
+    facade_hint: tuple[int, int] | None = None,
+) -> list[dict]:
+    """Detect the windows of one building in a Street View image.
 
-    The image must be the view pointed at the property (heading camera → address):
-    the target is the building at the horizontal centre. Claude also returns the
-    target facade's x-range; windows outside it (neighbours) are discarded.
+    By default the image must be the view pointed at the property (heading camera →
+    address): the target is the building at the horizontal centre. With *facade_hint*
+    the building to mark is the one between those x pixels instead; this is used for a
+    house of the same design as the property seen in another view. Claude also returns
+    the facade's x-range; windows outside it (neighbours) are discarded.
 
     Args:
-        image_path: Path to the front street view image file.
+        image_path: Path to the street view image file.
+        facade_hint: (x1, x2) pixel range of the building to mark, when it is not the
+            building at the centre of the image.
 
     Returns:
         List of {"x1", "y1", "x2", "y2"} dicts (pixel coords) for each window on
@@ -720,11 +906,21 @@ async def detect_windows(image_path: str | Path) -> list[dict]:
         img_w, img_h = 640, 640
 
     cx = img_w // 2
+    if facade_hint is not None:
+        hx1, hx2 = sorted(facade_hint)
+        where = (
+            f"The TARGET building is the house whose facade lies between about x = {hx1} and "
+            f"x = {hx2}. Buildings to the left and right of it are neighbours.\n\n"
+        )
+    else:
+        where = (
+            f"The camera is pointed at the property being assessed, so the TARGET building is the "
+            f"building at the horizontal centre of the image (around x = {cx}). Buildings to the "
+            f"left and right of it are neighbours.\n\n"
+        )
     prompt = (
         f"You are analysing a Google Street View photograph ({img_w}×{img_h} pixels).\n"
-        f"The camera is pointed at the property being assessed, so the TARGET building is the "
-        f"building at the horizontal centre of the image (around x = {cx}). Buildings to the "
-        f"left and right of it are neighbours.\n\n"
+        + where +
         f"Your task: mark the windows on the TARGET building's facade only.\n\n"
         f"## Step 1 — find the target building\n"
         f"- Give the left and right edges of the target building's facade in pixels "

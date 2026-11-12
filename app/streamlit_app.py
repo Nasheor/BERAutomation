@@ -55,6 +55,14 @@ from ber_automation.pipeline import BERPipeline
 # ---------------------------------------------------------------------------
 # Human-readable label dictionaries
 # ---------------------------------------------------------------------------
+# The four Street View images, by heading index (all from one camera position)
+STREETVIEW_LABELS = ["Front", "Right", "Rear", "Left"]
+# What the front image shows of the property (HouseDescription.target_view)
+TARGET_VIEW_NOTES: dict[str, str] = {
+    "side": "The front image shows only the side of the house.",
+    "partial": "The front image shows the house partly hidden.",
+    "hidden": "The house is blurred or hidden in the front image.",
+}
 BUILDING_TYPE_LABELS: dict[str, str] = {
     BuildingType.DETACHED.value: "Detached",
     BuildingType.SEMI_D_LENGTH.value: "Semi-Detached (Length Adjoining)",
@@ -1162,7 +1170,12 @@ if mode == "Full Pipeline":
             if sv_images:
                 st.markdown("**Street View (Multi-Angle)**")
                 # 2x2 grid instead of 1x4
-                labels = ["Front", "Right", "Rear", "Left"]
+                labels = STREETVIEW_LABELS
+                hd_img = pr.house_description
+                similar_idx = (
+                    hd_img.similar_house_view
+                    if hd_img and hd_img.uses_similar_house else None
+                )
                 row1_imgs = sv_images[:2]
                 row2_imgs = sv_images[2:4]
                 for row_imgs, offset in [(row1_imgs, 0), (row2_imgs, 2)]:
@@ -1176,6 +1189,11 @@ if mode == "Full Pipeline":
                             except (IndexError, ValueError):
                                 idx = offset + i
                             label = labels[idx] if idx < len(labels) else f"View {idx}"
+                            if idx == similar_idx:
+                                label += (
+                                    " \u2014 similar house (orange boxes)"
+                                    if pr.similar_house_windows else " \u2014 similar house"
+                                )
                             with cols[i]:
                                 ann = img_p.parent / f"{img_p.stem}_annotated.jpg"
                                 display_sv = str(ann) if ann.exists() else str(img_p)
@@ -1313,6 +1331,26 @@ if mode == "Full Pipeline":
                             f"area heating fuels: {fuels}."
                         )
                     st.caption(" ".join(lines))
+                hd = pr.house_description
+                if hd and hd.description:
+                    st.markdown(f"**Description:** {hd.description}")
+                view_note = TARGET_VIEW_NOTES.get(hd.target_view, "") if hd else ""
+                if hd and hd.uses_similar_house:
+                    view_name = (
+                        STREETVIEW_LABELS[hd.similar_house_view]
+                        if hd.similar_house_view < len(STREETVIEW_LABELS)
+                        else f"View {hd.similar_house_view}"
+                    )
+                    taken = ", ".join(hd.inferred_from_similar) or "the details it could not see"
+                    view_note += (
+                        f" From a house of the same design in the {view_name} image, "
+                        f"the AI took: {taken}. This is for the description only; "
+                        f"it does not change the rating."
+                    )
+                elif view_note:
+                    view_note += " No house of the same design was visible in the images."
+                if view_note:
+                    st.info(view_note.strip())
                 if sa.reasoning:
                     st.caption(sa.reasoning)
 

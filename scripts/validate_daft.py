@@ -163,6 +163,14 @@ def _summarise_result(result) -> dict:
         "footprint_conf": result.footprint.confidence if result.footprint else None,
         "street_conf": result.street_analysis.confidence if result.street_analysis else None,
     }
+    hd = result.house_description
+    if hd:
+        info["description"] = {
+            "target_view": hd.target_view, "similar_house_view": hd.similar_house_view,
+            "inferred_from_similar": hd.inferred_from_similar,
+            "similar_house_windows": result.similar_house_windows,
+            "text": hd.description,
+        }
     fp = result.footprint
     if fp and fp.units_in_block is not None:
         info["block"] = {

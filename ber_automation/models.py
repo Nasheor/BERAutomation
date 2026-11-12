@@ -158,6 +158,31 @@ class StreetViewAnalysis(BaseModel):
     reasoning: str = ""
 
 
+class HouseDescription(BaseModel):
+    """Plain description of the target house from Street View (display only).
+
+    Not used by the calculation. See describe_house() in vision/claude_analyzer.py.
+    """
+    # What the FRONT image shows of the target: "front" (street facade), "side" (gable or
+    # side wall), "partial" (facade partly hidden) or "hidden" (blurred or not visible)
+    target_view: str = "front"
+    # A house of the same design seen more clearly in one of the images, used to fill in
+    # details hidden on the target. Heading index of that image (0 = front view) and the
+    # x-range of the house's facade in it; None when no such house was found.
+    similar_house_view: Optional[int] = None
+    similar_house_x1: Optional[int] = None
+    similar_house_x2: Optional[int] = None
+    inferred_from_similar: list[str] = Field(default_factory=list)  # details taken from it
+    description: str = ""
+
+    @property
+    def uses_similar_house(self) -> bool:
+        """True when a similar house supplied details the front image did not show."""
+        return self.similar_house_view is not None and (
+            self.target_view != "front" or bool(self.inferred_from_similar)
+        )
+
+
 class HWBResult(BaseModel):
     """HWB (Heating demand) calculation result."""
     # Geometry
@@ -237,5 +262,8 @@ class PipelineResult(BaseModel):
     # "census", "census_urban" (heating only), "streetview", "default" or "override"
     epoch_source: Optional[str] = None
     heating_source: Optional[str] = None
+    house_description: Optional[HouseDescription] = None
+    # Windows marked on the similar house (see HouseDescription.similar_house_view); 0 if none
+    similar_house_windows: int = 0
     ber_result: Optional[BERResult] = None
     errors: list[str] = Field(default_factory=list)
