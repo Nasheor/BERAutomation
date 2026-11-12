@@ -1,15 +1,16 @@
-"""Construction-era prior from CSO Census 2022 (Ireland only).
+"""Census priors for construction era and heating fuel (Ireland only).
 
 Street View cannot reliably separate adjacent decades: most older Irish homes have
 replacement PVC windows and re-tiled roofs, and Claude reads 1980s estates as 1990s.
-The census records the year built of every home, aggregated per Small Area (80-120
-homes, usually one estate or part of one). The mix of build periods at the property's
-location is a strong prior for its era.
+Heating equipment is usually out of sight, so the heating system is mostly a guess
+from the setting. The census records both for every home, aggregated per Small Area
+(80-120 homes, usually one estate or part of one).
 
-Data: ``ber_automation/data/cso_year_built_sa2022.csv`` (built by
-``scripts/build_census_year_built.py`` from CSO table SAP2022T6T2SA; CC BY 4.0,
-Central Statistics Office). The point → Small Area lookup queries the CSO / Tailte
-Éireann Small Area boundary service (ArcGIS REST, generalised 20 m).
+Data (built by ``scripts/build_census_data.py``; CSO Census 2022, CC BY 4.0):
+- ``ber_automation/data/cso_year_built_sa2022.csv`` (table SAP2022T6T2SA)
+- ``ber_automation/data/cso_heating_sa2022.csv`` (table SAP2022T6T5SA)
+The point → Small Area lookup queries the CSO / Tailte Éireann Small Area boundary
+service (ArcGIS REST, generalised 20 m), which also gives the CSO urban-area flag.
 """
 
 from __future__ import annotations
@@ -22,16 +23,20 @@ from pathlib import Path
 import httpx
 
 from ber_automation.models import (
+    CensusArea,
     CensusEraPrior,
     ConstructionEpoch,
     Coordinates,
     Country,
+    HeatingSystem,
     StreetViewAnalysis,
 )
 
 log = logging.getLogger(__name__)
 
-DATA_FILE = Path(__file__).resolve().parents[1] / "data" / "cso_year_built_sa2022.csv"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+YEAR_BUILT_FILE = DATA_DIR / "cso_year_built_sa2022.csv"
+HEATING_FILE = DATA_DIR / "cso_heating_sa2022.csv"
 SMALL_AREA_URL = (
     "https://services-eu1.arcgis.com/BuS9rtTsYEV5C0xh/ArcGIS/rest/services/"
     "SMALL_AREA_2022_Genralised_20m_view/FeatureServer/0/query"
@@ -45,10 +50,10 @@ EPOCH_ORDER = [
     ConstructionEpoch.AFTER_2010,
 ]
 
-# Fewer stated households than this and the mix is too noisy to use.
+# Fewer stated households than this and a mix is too noisy to use.
 MIN_HOUSEHOLDS = 20
-# Claude's band must hold at least this share of the area's homes to beat the prior
-# when it is two or more bands from the dominant one.
+# Era: Claude's band must hold at least this share of the area's homes to beat the
+# prior when it is two or more bands from the dominant one...
 DISTANT_MIN_SHARE = 0.10
 # ...and this share, with this confidence, when it is the adjacent band.
 ADJACENT_MIN_SHARE = 0.25
@@ -56,29 +61,44 @@ ADJACENT_MIN_CONFIDENCE = 0.8
 # Street View confidence below which its classification is not used at all
 # (matches the pipeline's gate).
 STREETVIEW_MIN_CONFIDENCE = 0.4
+# Heating: at this share of gas-heated homes the gas network serves the area, and an
+# estate home defaults to gas whatever its age (older homes there may still use oil).
+GAS_AVAILABLE_SHARE = 0.15
+# Census fuel -> heating system, for the non-gas default. LPG, coal, peat and "other"
+# have no HWB equivalent and are skipped.
+FUEL_TO_SYSTEM = {
+    "oil": HeatingSystem.OIL_BOILER,
+    "electricity": HeatingSystem.ELECTRIC_DIRECT,
+    "wood": HeatingSystem.BIOMASS,
+}
 
 
-@lru_cache(maxsize=1)
-def _year_built_table() -> dict[str, dict[str, int]]:
-    with DATA_FILE.open(encoding="utf-8") as f:
+def _load(path: Path) -> dict[str, dict[str, int]]:
+    with path.open(encoding="utf-8") as f:
         return {
             row.pop("sa_guid"): {k: int(v) for k, v in row.items()}
             for row in csv.DictReader(f)
         }
 
 
-def prior_from_counts(
-    counts: dict[str, int], small_area: str = "", urban_area: str = "",
-) -> CensusEraPrior | None:
-    """Build the prior from household counts per epoch; None when too few homes."""
+@lru_cache(maxsize=1)
+def _year_built_table() -> dict[str, dict[str, int]]:
+    return _load(YEAR_BUILT_FILE)
+
+
+@lru_cache(maxsize=1)
+def _heating_table() -> dict[str, dict[str, int]]:
+    return _load(HEATING_FILE)
+
+
+def prior_from_counts(counts: dict[str, int]) -> CensusEraPrior | None:
+    """Build the era prior from household counts per epoch; None when too few homes."""
     total = sum(counts.get(e.value, 0) for e in EPOCH_ORDER)
     if total < MIN_HOUSEHOLDS:
         return None
     shares = {e.value: counts.get(e.value, 0) / total for e in EPOCH_ORDER}
     dominant = max(EPOCH_ORDER, key=lambda e: shares[e.value])
     return CensusEraPrior(
-        small_area=small_area,
-        urban_area=urban_area,
         households=total,
         shares=shares,
         dominant_epoch=dominant,
@@ -86,16 +106,35 @@ def prior_from_counts(
     )
 
 
-async def lookup_era_prior(
+def area_from_counts(
+    year_built: dict[str, int] | None,
+    heating: dict[str, int] | None,
+    small_area: str = "",
+    urban: bool = False,
+    urban_area: str = "",
+) -> CensusArea:
+    """Assemble a CensusArea from the two count tables (either may be missing)."""
+    area = CensusArea(small_area=small_area, urban=urban, urban_area=urban_area)
+    if year_built:
+        area.era = prior_from_counts(year_built)
+    if heating:
+        total = sum(heating.values())
+        if total >= MIN_HOUSEHOLDS:
+            area.heating_households = total
+            area.heating_shares = {k: v / total for k, v in heating.items()}
+    return area
+
+
+async def lookup_census_area(
     coords: Coordinates,
     country: Country | None = None,
     client: httpx.AsyncClient | None = None,
-) -> CensusEraPrior | None:
-    """Return the census era prior for the Small Area containing ``coords``.
+) -> CensusArea | None:
+    """Return the census facts for the Small Area containing ``coords``.
 
     Ireland only (the default country). Returns None for other countries, when the
     point is outside every Small Area, or on any network/data error, so the
-    pipeline falls back to the Street View era.
+    pipeline falls back to Street View alone.
     """
     if country not in (None, Country.IRELAND):
         return None
@@ -104,7 +143,7 @@ async def lookup_era_prior(
         "geometryType": "esriGeometryPoint",
         "inSR": 4326,
         "spatialRel": "esriSpatialRelIntersects",
-        "outFields": "SA_GUID_2022,SA_PUB2022,SA_URBAN_AREA_NAME",
+        "outFields": "SA_GUID_2022,SA_PUB2022,SA_URBAN_AREA_FLAG,SA_URBAN_AREA_NAME",
         "returnGeometry": "false",
         "f": "json",
     }
@@ -119,24 +158,28 @@ async def lookup_era_prior(
         if not features:
             return None
         attrs = features[0]["attributes"]
-        counts = _year_built_table().get(attrs["SA_GUID_2022"])
+        guid = attrs["SA_GUID_2022"]
+        return area_from_counts(
+            _year_built_table().get(guid),
+            _heating_table().get(guid),
+            small_area=str(attrs.get("SA_PUB2022") or ""),
+            urban=attrs.get("SA_URBAN_AREA_FLAG") == 1,
+            urban_area=str(attrs.get("SA_URBAN_AREA_NAME") or ""),
+        )
     except Exception as e:  # network, JSON, missing data file
-        log.warning("Census era lookup failed: %s", e)
+        log.warning("Census lookup failed: %s", e)
         return None
-    if counts is None:
-        return None
-    return prior_from_counts(
-        counts,
-        small_area=str(attrs.get("SA_PUB2022") or ""),
-        urban_area=str(attrs.get("SA_URBAN_AREA_NAME") or ""),
-    )
+
+
+def _usable(analysis: StreetViewAnalysis | None) -> bool:
+    return analysis is not None and analysis.confidence >= STREETVIEW_MIN_CONFIDENCE
 
 
 def choose_epoch(
     prior: CensusEraPrior | None,
     analysis: StreetViewAnalysis | None,
 ) -> tuple[ConstructionEpoch | None, str]:
-    """Combine the census prior with Claude's Street View era.
+    """Combine the census era prior with Claude's Street View era.
 
     Returns (epoch, source), where source is "census", "streetview" or "default"
     (epoch None: let BuildingInput use its default).
@@ -151,11 +194,7 @@ def choose_epoch(
       homes are from that period (e.g. a 1970s house in a mixed area); otherwise the
       dominant period.
     """
-    visual = (
-        analysis.construction_epoch
-        if analysis is not None and analysis.confidence >= STREETVIEW_MIN_CONFIDENCE
-        else None
-    )
+    visual = analysis.construction_epoch if _usable(analysis) else None
     if prior is None:
         return (visual, "streetview") if visual is not None else (None, "default")
     dominant = prior.dominant_epoch
@@ -169,3 +208,38 @@ def choose_epoch(
     else:
         keep = share >= DISTANT_MIN_SHARE
     return (visual, "streetview") if keep else (dominant, "census")
+
+
+def choose_heating(
+    area: CensusArea | None,
+    analysis: StreetViewAnalysis | None,
+    epoch: ConstructionEpoch | None = None,
+) -> tuple[HeatingSystem | None, str]:
+    """Pick the heating system: what Claude saw, else the area's census default.
+
+    Returns (system, source): "streetview", "census" (heating-fuel mix),
+    "census_urban" (urban flag only) or "default" (system None).
+
+    Rules:
+    - Claude saw a heating clue on the property (heating_observed): Claude's system.
+    - Gas heats >= 15 % of the area's homes: the gas network is there → gas boiler.
+    - Otherwise the area's most common of oil / electricity / wood. Electricity in a
+      home built after 2010 means a heat pump (NZEB rules), not direct electric.
+    - No usable fuel mix: CSO urban area → gas boiler, rural → oil boiler.
+    - No census at all: Claude's guess (from the setting rule in its prompt).
+    """
+    if _usable(analysis) and analysis.heating_observed:
+        return analysis.heating_system_guess, "streetview"
+    if area is None:
+        return (analysis.heating_system_guess, "streetview") if _usable(analysis) else (None, "default")
+
+    shares = area.heating_shares
+    if shares:
+        if shares.get("gas", 0.0) >= GAS_AVAILABLE_SHARE:
+            return HeatingSystem.GAS_BOILER, "census"
+        fuel = max(FUEL_TO_SYSTEM, key=lambda k: shares.get(k, 0.0))
+        system = FUEL_TO_SYSTEM[fuel]
+        if system == HeatingSystem.ELECTRIC_DIRECT and epoch == ConstructionEpoch.AFTER_2010:
+            system = HeatingSystem.HEAT_PUMP_AIR
+        return system, "census"
+    return (HeatingSystem.GAS_BOILER if area.urban else HeatingSystem.OIL_BOILER), "census_urban"

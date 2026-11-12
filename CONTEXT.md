@@ -221,14 +221,16 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   confidence ≤ 0.5 — this lands at 0.40–0.45, just above the 0.4 gate in `_build_input()`;
   below it, the defaults (detached, before_1980) would be used instead.
 
-### Construction Era: Census Prior (`ber_automation/geospatial/census.py`, Ireland only)
+### Census Priors: Era and Heating (`ber_automation/geospatial/census.py`, Ireland only)
 - Street View can't separate adjacent decades (replacement PVC windows, re-tiled roofs);
   Claude read every 1980s house as 1990s and prompt changes didn't move it.
 - **Data:** CSO Census 2022 table SAP2022T6T2SA (households by year built, per Small Area of
   80–120 homes), merged into the 5 HWB epochs →
-  `ber_automation/data/cso_year_built_sa2022.csv` (18,920 areas, ~1 MB, CC BY 4.0).
-  Rebuild: `python scripts/build_census_year_built.py`. The table also holds person counts
-  (`...C02`); only households (`...C01`) are used.
+  `ber_automation/data/cso_year_built_sa2022.csv` (18,920 areas, ~1 MB, CC BY 4.0), and
+  SAP2022T6T5SA (households by central-heating fuel) → `cso_heating_sa2022.csv`
+  (gas/oil/electricity/wood/lpg/coal/peat/other/none).
+  Rebuild both: `python scripts/build_census_data.py [--source-dir DIR]`. The tables also
+  hold person counts (`...C02`); only households (`...C01`) are used.
 - **Lookup:** point → Small Area via the CSO/Tailte Éireann ArcGIS service
   `SMALL_AREA_2022_Genralised_20m_view` (sic), run in parallel with the Street View call.
   Any failure → None (falls back to Street View). Non-Irish countries → None.
@@ -236,10 +238,20 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   census period; Claude's band adjacent to the dominant one → dominant, unless that band is
   ≥ 25 % of the area and conf ≥ 0.8; two or more bands away → Claude if ≥ 10 % of the area
   is from that period, else dominant. Fewer than 20 stated households → no prior.
-- `PipelineResult.era_prior` / `epoch_source` ("census" | "streetview" | "default" |
-  "override") record the decision; the app's Era card shows the era used plus the census mix.
-- The layer also has `SA_URBAN_AREA_NAME` (stored as `era_prior.urban_area`), which could
-  fix the urban/rural heating default (RK10 is in the "Tower" urban area).
+- **`choose_heating(area, analysis, epoch)`:** Claude now returns `heating_observed`
+  (true only if a tank/flue/meter/heat pump of the target is visible). Observed → Claude.
+  Otherwise: gas ≥ 15 % of the area's homes → gas boiler (network present; older homes
+  there may still be oil); else the most common of oil / electricity / wood (electricity +
+  after_2010 → heat_pump_air). No fuel mix (< 20 households) → CSO urban flag: urban → gas,
+  rural → oil. No census → Claude's guess.
+- Why not the urban flag alone: CSO "urban areas" are 848 settlements, including
+  1-small-area villages (Annascaul, Ahascragh) with no gas, and towns without a gas network
+  (Sligo, Letterkenny: 86 small areas each), while Tower (12) has gas. RK10's area is 52 %
+  oil / 38 % gas, so "most common fuel" would also be wrong; the gas threshold isn't.
+- `PipelineResult.census` (CensusArea: small_area, urban, urban_area, era, heating_shares)
+  plus `epoch_source` / `heating_source` ("census" | "census_urban" | "streetview" |
+  "default" | "override") record the decisions; the app's Era/Heating cards show the values
+  used, with a caption giving the census mixes.
 
 ### Window Detection (`detect_windows()`, display only)
 - Runs on the **front view only** (`streetview_0`); the other headings never show the property.
@@ -373,6 +385,7 @@ Report: `report.json` (previous run kept as `report_after_footprint_fix.json`).
   - RK10 storeys: Claude sees a dormer bungalow with rooms in the roof and says 2; the
     assessor used 1. Needs a rule for dormers (the Excel has no 1.5-storey option).
   - RK10 heating: Claude calls Kilnamucky "a small rural locality" → oil; assessor: gas.
+    **Fixed 2026-11-12 by the census heating default.**
   - HYW6: the property is privacy-blurred in Street View; type/era come from the neighbours.
 
 **Part B — with the census era prior (2026-11-12, 3 runs each):**
@@ -382,8 +395,16 @@ Report: `report.json` (previous: `report_classify_labels.json`).
 - BER exact 3/5 (K7AC, RK10 B2, TP3C), within one band 5/5. HYW6 B1 (95 kWh/m²a; B2
   starts at 100), held back by its +47 % footprint. AX03 A3 vs B1 (terraced vs semi-d).
 
+**Part B — with the census heating default (2026-11-12, 3 runs each):**
+Report: `report.json` (previous: `report_census_era.json`).
+- Heating gas 5/5 in all runs (RK10 was oil: Claude still guesses oil, `heating_observed`
+  false, census overrides). Claude reported `heating_observed: false` for all 15 runs.
+- RK10 now 108 kWh/m²a vs assessor 108.8 (B2 exact), but partly by cancellation: footprint
+  −35 % and 2 storeys vs 1.
+- BER exact 3/5, within one band 5/5 (unchanged count; RK10 was already B2).
+
 ### Test Coverage
-- 98 tests total (`tests/test_census_era.py`: prior shares, the choose_epoch rules, lookup with mocked service, data file, `_build_input` + override; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 105 tests total (`tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0),

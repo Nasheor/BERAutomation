@@ -63,6 +63,7 @@ _ANALYSIS_BODY = """
   "building_type": one of ["detached", "semi_d_length", "semi_d_width", "terraced_length", "terraced_width"],
   "estimated_storeys": integer (1-4),
   "heating_system_guess": one of ["oil_boiler", "gas_boiler", "biomass", "electric_direct", "heat_pump_air", "heat_pump_ground", "heat_pump_water", "district_heating"],
+  "heating_observed": true ONLY if you can see a heating clue belonging to the TARGET property (oil tank, boiler flue, gas meter box, heat pump unit, pellet store); false if heating_system_guess is a default from the setting,
   "adjacent_side": "length" or "width" (which side is shared for semi-d/terraced; use "length" for detached),
   "estimated_units_in_row": integer (how many units in the terrace row; 1 for detached, 2 for semi-d, 3+ for terraced),
   "confidence": float 0-1,
@@ -285,6 +286,7 @@ async def analyze_streetview(
         heating_system_guess=hsys,
         adjacent_side=data.get("adjacent_side", "length"),
         estimated_units_in_row=units_in_row,
+        heating_observed=data.get("heating_observed") is True,
         confidence=data.get("confidence", 0.5),
         reasoning=data.get("reasoning", ""),
     )

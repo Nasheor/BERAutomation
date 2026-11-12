@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 from ber_automation.ber_engine.calculator import HWBCalculator
-from ber_automation.geospatial.census import choose_epoch, lookup_era_prior
+from ber_automation.geospatial.census import choose_epoch, choose_heating, lookup_census_area
 from ber_automation.geospatial.geocoder import geocode_address
 from ber_automation.geospatial.imagery import (
     fetch_satellite_image,
@@ -121,7 +121,7 @@ class BERPipeline:
         re-fetching images from Google.
         """
         # Phase 3: Street view analysis (before satellite to inform footprint), with
-        # the census era prior looked up in parallel (Ireland; None elsewhere/on error)
+        # the census Small Area looked up in parallel (Ireland; None elsewhere/on error)
         async def _streetview():
             if not sv_paths:
                 return None
@@ -130,15 +130,15 @@ class BERPipeline:
                 location=coords.formatted_address or None,
             )
 
-        analysis, era_prior = await asyncio.gather(
-            _streetview(), lookup_era_prior(coords, country), return_exceptions=True,
+        analysis, census_area = await asyncio.gather(
+            _streetview(), lookup_census_area(coords, country), return_exceptions=True,
         )
         if isinstance(analysis, Exception):
             result.errors.append(f"Claude analysis failed: {analysis}")
         else:
             result.street_analysis = analysis
-        if not isinstance(era_prior, Exception):
-            result.era_prior = era_prior
+        if not isinstance(census_area, Exception):
+            result.census = census_area
 
         # Phase 4: Footprint extraction (Claude Vision primary, OpenCV fallback)
         if result.satellite_image_path:
@@ -466,17 +466,26 @@ class BERPipeline:
             sa = result.street_analysis
             params["building_type"] = sa.building_type
             params["heated_storeys"] = sa.estimated_storeys
-            params["heating_system"] = sa.heating_system_guess
 
         # Era: census prior for the location combined with the Street View reading
-        epoch, result.epoch_source = choose_epoch(result.era_prior, result.street_analysis)
+        census = result.census
+        epoch, result.epoch_source = choose_epoch(
+            census.era if census else None, result.street_analysis,
+        )
         if epoch is not None:
             params["construction_epoch"] = epoch
+
+        # Heating: what Claude saw on the property, else the area's census default
+        heating, result.heating_source = choose_heating(census, result.street_analysis, epoch)
+        if heating is not None:
+            params["heating_system"] = heating
 
         # Apply any user overrides
         if overrides:
             params.update(overrides)
             if "construction_epoch" in overrides:
                 result.epoch_source = "override"
+            if "heating_system" in overrides:
+                result.heating_source = "override"
 
         return BuildingInput(**params)

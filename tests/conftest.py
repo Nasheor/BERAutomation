@@ -19,7 +19,7 @@ def _no_census_network(monkeypatch):
     async def _none(*args, **kwargs):
         return None
 
-    monkeypatch.setattr("ber_automation.pipeline.lookup_era_prior", _none)
+    monkeypatch.setattr("ber_automation.pipeline.lookup_census_area", _none)
 
 
 @pytest.fixture

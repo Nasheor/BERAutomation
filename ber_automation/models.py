@@ -145,6 +145,7 @@ class StreetViewAnalysis(BaseModel):
     heating_system_guess: HeatingSystem = HeatingSystem.GAS_BOILER
     adjacent_side: str = "length"  # "length" or "width" for semi-d/terraced
     estimated_units_in_row: int = Field(ge=1, default=1, description="Units in terrace row (1=detached, 2=semi-d)")
+    heating_observed: bool = False  # True only if a heating clue (tank, flue, meter, heat pump) was seen
     confidence: float = Field(ge=0, le=1, default=0.5)
     reasoning: str = ""
 
@@ -197,12 +198,20 @@ class BERResult(BaseModel):
 
 class CensusEraPrior(BaseModel):
     """Build-period mix of the homes in the property's census Small Area (Ireland)."""
-    small_area: str = ""          # CSO Small Area code (SA_PUB2022)
-    urban_area: str = ""          # CSO urban area name, e.g. "Cork city and suburbs"; "" if rural
     households: int = 0           # households with a stated year built
     shares: dict[str, float] = Field(default_factory=dict)  # epoch value -> share 0-1
     dominant_epoch: ConstructionEpoch = ConstructionEpoch.BEFORE_1980
     dominant_share: float = 0.0
+
+
+class CensusArea(BaseModel):
+    """CSO Census 2022 facts for the Small Area containing the property (Ireland)."""
+    small_area: str = ""          # CSO Small Area code (SA_PUB2022)
+    urban: bool = False           # inside a CSO urban area (town, village or city)
+    urban_area: str = ""          # e.g. "Cork city and suburbs"; "" when rural
+    era: Optional[CensusEraPrior] = None
+    heating_households: int = 0   # households with a stated central-heating fuel
+    heating_shares: dict[str, float] = Field(default_factory=dict)  # gas/oil/electricity/... -> 0-1
 
 
 class PipelineResult(BaseModel):
@@ -213,7 +222,10 @@ class PipelineResult(BaseModel):
     streetview_image_path: Optional[str] = None
     footprint: Optional[FootprintResult] = None
     street_analysis: Optional[StreetViewAnalysis] = None
-    era_prior: Optional[CensusEraPrior] = None
-    epoch_source: Optional[str] = None  # "census", "streetview", "default" or "override"
+    census: Optional[CensusArea] = None
+    # Where the era / heating used by the calculation came from:
+    # "census", "census_urban" (heating only), "streetview", "default" or "override"
+    epoch_source: Optional[str] = None
+    heating_source: Optional[str] = None
     ber_result: Optional[BERResult] = None
     errors: list[str] = Field(default_factory=list)
