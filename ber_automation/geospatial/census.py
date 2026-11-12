@@ -1,14 +1,17 @@
-"""Census priors for construction era and heating fuel (Ireland only).
+"""Census priors for construction era, heating fuel and home size (Ireland only).
 
 Street View cannot reliably separate adjacent decades: most older Irish homes have
 replacement PVC windows and re-tiled roofs, and Claude reads 1980s estates as 1990s.
 Heating equipment is usually out of sight, so the heating system is mostly a guess
 from the setting. The census records both for every home, aggregated per Small Area
-(80-120 homes, usually one estate or part of one).
+(80-120 homes, usually one estate or part of one). Its room counts also say how big
+the homes are, which settles how many homes share a roof when the satellite image
+cannot.
 
 Data (built by ``scripts/build_census_data.py``; CSO Census 2022, CC BY 4.0):
 - ``ber_automation/data/cso_year_built_sa2022.csv`` (table SAP2022T6T2SA)
 - ``ber_automation/data/cso_heating_sa2022.csv`` (table SAP2022T6T5SA)
+- ``ber_automation/data/cso_rooms_sa2022.csv`` (table SAP2022T6T4SA)
 The point → Small Area lookup queries the CSO / Tailte Éireann Small Area boundary
 service (ArcGIS REST, generalised 20 m), which also gives the CSO urban-area flag.
 """
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -37,6 +41,7 @@ log = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 YEAR_BUILT_FILE = DATA_DIR / "cso_year_built_sa2022.csv"
 HEATING_FILE = DATA_DIR / "cso_heating_sa2022.csv"
+ROOMS_FILE = DATA_DIR / "cso_rooms_sa2022.csv"
 SMALL_AREA_URL = (
     "https://services-eu1.arcgis.com/BuS9rtTsYEV5C0xh/ArcGIS/rest/services/"
     "SMALL_AREA_2022_Genralised_20m_view/FeatureServer/0/query"
@@ -71,6 +76,17 @@ FUEL_TO_SYSTEM = {
     "electricity": HeatingSystem.ELECTRIC_DIRECT,
     "wood": HeatingSystem.BIOMASS,
 }
+# Home count: the census "rooms" of a home (kitchens, living rooms, bedrooms; not
+# bathrooms or halls) and its gross floor area are modelled as floor ~ rooms x 20 m2
+# (an Irish 3-bed semi: 5 rooms, ~100 m2), log-normal spread 0.25; "8 or more" counts
+# as 8.5. Only the ranking of the possible counts is used, and on the validation houses
+# it is the same for 18-22 m2 per room and a spread of 0.15-0.3.
+FLOOR_M2_PER_ROOM = 20.0
+ROOMS_8_PLUS = 8.5
+FLOOR_AREA_SPREAD = 0.25
+# Narrowest frontage of one home in a pair or row (old city terraces are ~4.5 m).
+MIN_FRONTAGE_M = 4.0
+MAX_UNITS = 12
 
 
 def _load(path: Path) -> dict[str, dict[str, int]]:
@@ -91,6 +107,11 @@ def _heating_table() -> dict[str, dict[str, int]]:
     return _load(HEATING_FILE)
 
 
+@lru_cache(maxsize=1)
+def _rooms_table() -> dict[str, dict[str, int]]:
+    return _load(ROOMS_FILE)
+
+
 def prior_from_counts(counts: dict[str, int]) -> CensusEraPrior | None:
     """Build the era prior from household counts per epoch; None when too few homes."""
     total = sum(counts.get(e.value, 0) for e in EPOCH_ORDER)
@@ -106,22 +127,28 @@ def prior_from_counts(counts: dict[str, int]) -> CensusEraPrior | None:
     )
 
 
+def _shares(counts: dict[str, int] | None) -> tuple[int, dict[str, float]]:
+    """(households, shares) of one table row; (0, {}) when too few households."""
+    total = sum(counts.values()) if counts else 0
+    if total < MIN_HOUSEHOLDS:
+        return 0, {}
+    return total, {k: v / total for k, v in counts.items()}
+
+
 def area_from_counts(
     year_built: dict[str, int] | None,
     heating: dict[str, int] | None,
     small_area: str = "",
     urban: bool = False,
     urban_area: str = "",
+    rooms: dict[str, int] | None = None,
 ) -> CensusArea:
-    """Assemble a CensusArea from the two count tables (either may be missing)."""
+    """Assemble a CensusArea from the count tables (any may be missing)."""
     area = CensusArea(small_area=small_area, urban=urban, urban_area=urban_area)
     if year_built:
         area.era = prior_from_counts(year_built)
-    if heating:
-        total = sum(heating.values())
-        if total >= MIN_HOUSEHOLDS:
-            area.heating_households = total
-            area.heating_shares = {k: v / total for k, v in heating.items()}
+    area.heating_households, area.heating_shares = _shares(heating)
+    area.rooms_households, area.rooms_shares = _shares(rooms)
     return area
 
 
@@ -165,6 +192,7 @@ async def lookup_census_area(
             small_area=str(attrs.get("SA_PUB2022") or ""),
             urban=attrs.get("SA_URBAN_AREA_FLAG") == 1,
             urban_area=str(attrs.get("SA_URBAN_AREA_NAME") or ""),
+            rooms=_rooms_table().get(guid),
         )
     except Exception as e:  # network, JSON, missing data file
         log.warning("Census lookup failed: %s", e)
@@ -243,3 +271,57 @@ def choose_heating(
             system = HeatingSystem.HEAT_PUMP_AIR
         return system, "census"
     return (HeatingSystem.GAS_BOILER if area.urban else HeatingSystem.OIL_BOILER), "census_urban"
+
+
+def home_size_likelihood(floor_m2: float, rooms_shares: dict[str, float]) -> float:
+    """How typical a home of ``floor_m2`` gross floor area is for the area's room mix.
+
+    A mixture, over the area's room counts, of log-normal floor areas centred on
+    rooms x FLOOR_M2_PER_ROOM. Unnormalised: only compare values within one area.
+    """
+    if floor_m2 <= 0:
+        return 0.0
+    total = 0.0
+    for key, share in rooms_shares.items():
+        rooms = ROOMS_8_PLUS if key == "8+" else float(key)
+        z = math.log(floor_m2 / (rooms * FLOOR_M2_PER_ROOM)) / FLOOR_AREA_SPREAD
+        total += share * math.exp(-0.5 * z * z)
+    return total
+
+
+def choose_unit_count(
+    block_long_m: float,
+    block_short_m: float,
+    claude_units: int,
+    units_visible: bool,
+    area: CensusArea | None,
+    storeys: int | None = None,
+    detached: bool = False,
+) -> tuple[int, str]:
+    """Number of homes in the satellite block outline: Claude's count or the census's.
+
+    Returns (units, source), source "claude" or "census".
+
+    Claude outlines the whole attached block and counts its homes, but party walls are
+    often invisible from above, and then it guesses from the block length (a 17 m block
+    came back as 1, 2, 3 or 4 homes across runs). When Claude says it could not see
+    where the homes end, the count whose per-home floor area (block area / n x storeys)
+    best fits the Small Area's room mix is used instead, among the counts that leave
+    each home at least MIN_FRONTAGE_M wide (ties go to Claude's count).
+
+    Claude's count is kept when it saw the boundaries, when Street View says the house
+    is detached (never split it), and when there is no census room mix.
+    """
+    claude_units = max(1, claude_units)
+    if units_visible or detached or area is None or not area.rooms_shares:
+        return claude_units, "claude"
+    floors = max(1, storeys or 2)
+    candidates = {claude_units} | {
+        n for n in range(1, MAX_UNITS + 1) if n == 1 or block_long_m / n >= MIN_FRONTAGE_M
+    }
+
+    def score(n: int) -> tuple[float, bool]:
+        floor = block_long_m * block_short_m / n * floors
+        return home_size_likelihood(floor, area.rooms_shares), n == claude_units
+
+    return max(candidates, key=score), "census"

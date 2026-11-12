@@ -1226,6 +1226,18 @@ if mode == "Full Pipeline":
                 method = source_labels.get(fp.source, fp.source)
                 fc3.metric("Confidence", f"{fp.confidence:.0%}")
                 st.caption(f"Method: {method}")
+                changed = fp.units_source == "census" and fp.units_claude != fp.units_in_block
+                if fp.units_in_block and (fp.units_in_block > 1 or changed):
+                    n = fp.units_in_block
+                    homes = (f"Roof block {fp.block_length_m}m × {fp.block_width_m}m: "
+                             f"{n} home{'s' if n > 1 else ''}")
+                    if changed:
+                        homes += (f". AI Vision counted {fp.units_claude} but could not see the "
+                                  f"party walls, so the count that best fits the size of homes "
+                                  f"in this census Small Area is used")
+                    elif fp.units_source == "census":
+                        homes += " (AI count, consistent with the census home sizes)"
+                    st.caption(homes + ".")
 
         # --- AI Building Analysis ---
         if pr.street_analysis:

@@ -165,6 +165,11 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   - Why the longer edge rather than an edge Claude names: Claude mixed up the edge order; area per
     home = block area / count whichever edge is split, and rows are nearly always longer than deep.
   - Street View's type/units go in as a "hint (may be wrong)" for the home count.
+  - Claude also returns `units_visible` (it can see every party wall / plot boundary, or the
+    house is detached). When false, `census.choose_unit_count()` picks the count from the Small
+    Area's room mix (see Census Priors). `FootprintResult` keeps `block_length_m`,
+    `block_width_m`, `units_in_block`, `units_claude`, `units_visible`, `units_source`; the app
+    shows them under the footprint card.
   - A reply without 4 valid corners → confidence 0 (OpenCV fallback), never a guess.
 - **Uploaded-image path (zoom=None): `SATELLITE_ANALYSIS_PROMPT`** — scale unknown, so Claude
   estimates metres from cars, doors, bins etc. and is told to measure one unit.
@@ -221,15 +226,16 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   confidence ≤ 0.5 — this lands at 0.40–0.45, just above the 0.4 gate in `_build_input()`;
   below it, the defaults (detached, before_1980) would be used instead.
 
-### Census Priors: Era and Heating (`ber_automation/geospatial/census.py`, Ireland only)
+### Census Priors: Era, Heating and Home Count (`ber_automation/geospatial/census.py`, Ireland only)
 - Street View can't separate adjacent decades (replacement PVC windows, re-tiled roofs);
   Claude read every 1980s house as 1990s and prompt changes didn't move it.
 - **Data:** CSO Census 2022 table SAP2022T6T2SA (households by year built, per Small Area of
   80–120 homes), merged into the 5 HWB epochs →
   `ber_automation/data/cso_year_built_sa2022.csv` (18,920 areas, ~1 MB, CC BY 4.0), and
   SAP2022T6T5SA (households by central-heating fuel) → `cso_heating_sa2022.csv`
-  (gas/oil/electricity/wood/lpg/coal/peat/other/none).
-  Rebuild both: `python scripts/build_census_data.py [--source-dir DIR]`. The tables also
+  (gas/oil/electricity/wood/lpg/coal/peat/other/none), and SAP2022T6T4SA (households by
+  number of rooms, 1–7 and 8+) → `cso_rooms_sa2022.csv`.
+  Rebuild all three: `python scripts/build_census_data.py [--source-dir DIR]`. The tables also
   hold person counts (`...C02`); only households (`...C01`) are used.
 - **Lookup:** point → Small Area via the CSO/Tailte Éireann ArcGIS service
   `SMALL_AREA_2022_Genralised_20m_view` (sic), run in parallel with the Street View call.
@@ -248,7 +254,18 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   1-small-area villages (Annascaul, Ahascragh) with no gas, and towns without a gas network
   (Sligo, Letterkenny: 86 small areas each), while Tower (12) has gas. RK10's area is 52 %
   oil / 38 % gas, so "most common fuel" would also be wrong; the gas threshold isn't.
-- `PipelineResult.census` (CensusArea: small_area, urban, urban_area, era, heating_shares)
+- **`choose_unit_count(block_long, block_short, claude_units, units_visible, area, storeys,
+  detached)`:** party walls are often invisible from above, and then Claude's home count is a
+  guess from the block length (HYW6's 17 m block came back as 1, 2, 3 or 4 homes across
+  runs). When `units_visible` is false, each count n is scored by how typical a home of
+  block area / n × storeys (default 2) is for the area's room mix: a mixture of log-normal
+  floor areas centred on rooms × 20 m² (spread 0.25, "8+" = 8.5 rooms). Only counts leaving
+  ≥ 4 m of frontage per home are tried (max 12); ties go to Claude's count. Claude's count is
+  kept when it saw the boundaries, when Street View says detached, or with no room mix
+  (< 20 households). The ranking on the validation houses is the same for 18–22 m²/room and
+  spread 0.15–0.3.
+- `PipelineResult.census` (CensusArea: small_area, urban, urban_area, era, heating_shares,
+  rooms_shares)
   plus `epoch_source` / `heating_source` ("census" | "census_urban" | "streetview" |
   "default" | "override") record the decisions; the app's Era/Heating cards show the values
   used, with a caption giving the census mixes.
@@ -403,11 +420,37 @@ Report: `report.json` (previous: `report_census_era.json`).
   −35 % and 2 storeys vs 1.
 - BER exact 3/5, within one band 5/5 (unchanged count; RK10 was already B2).
 
+**Part B — with the census home count (2026-11-12, 3 runs each):**
+Report: `report.json` (previous: `report_census_heating.json`). Claude said
+`units_visible: false` in all 15 runs, so the census picked the count every time.
+
+| Eircode | Block (m) | Homes Claude → census | Footprint area (before → now) | BER assessor → pipeline (before → now) |
+|---|---|---|---|---|
+| T23 HYW6 | 17.4 × 9.1 | 2 → 3 | +45…+48% → −2…−3% | B2 → B1 → **B2** (100.6 vs 103.3) |
+| T23 RK10 | 9.1 × 8.0 | 2 → 1 | −33…−38% → +26…+29% | B2 → B2 → B1 (96.6 vs 108.8) |
+| T12 K7AC | 12.1 × 9.9 | 2 → 2 | +1…+3% → +3…+4% | A3 → A3 |
+| T23 AX03 | 25.7 × 8.2 | 6 → 4 | +18% (OpenCV) → +80…+90% | B1 → A3 |
+| T12 TP3C | 12.2 × 9.0 | 2 → 2 | −13% → −13…−16% | B1 → B1 |
+
+- BER exact 3/5 (HYW6, K7AC, TP3C; was K7AC, RK10, TP3C), within one band 5/5.
+- Footprint mean |error| (median run) 24 % → 27 %; without AX03 25 % → 11 %.
+- HYW6, the case this targets, is fixed. RK10's earlier B2 came from errors cancelling
+  (−35 % footprint, 2 storeys vs 1); undoing the split leaves +27 % with the storeys error.
+- **AX03 regressed, two causes:** (1) Claude's confidence is now 0.4 in all runs (was ≤ 0.3,
+  likely the new `units_visible` field taking the count doubt out of the confidence), so its
+  block is used instead of OpenCV. (2) The terrace runs off both ends of the image: the
+  outline covers 87 % of the 29.5 m frame and is only part of the row, and Tivoli's Small Area
+  (047277001) is mostly 5–7-room homes, so 4 homes of 105 m² fit it best, while AX03 is a
+  56 m² home (likelihood 0.18 vs 0.65). Claude's own count (6) would give +25 %.
+  Candidate fix: treat a block outline that reaches the image edge as unmeasured (keep
+  Claude's count and/or cap confidence at 0.3 → OpenCV). Only AX03 is affected on this set.
+
 ### Test Coverage
-- 105 tests total (`tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 116 tests total (`tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
-    along the longer edge into the slice nearest the centre; missing corners → confidence 0),
+    along the longer edge into the slice nearest the centre; missing corners → confidence 0;
+    census room mix sets the home count only when `units_visible` is false),
     malformed JSON, Mapbox scale = half the Google scale (mocked async Claude API)
   - `analyze_streetview()` — single image backward-compat, multi-image (4 views sent), malformed JSON defaults,
     `location` in the prompt only when given, `claude_temperature` sent only when set

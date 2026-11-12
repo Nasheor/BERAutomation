@@ -11,6 +11,7 @@ from ber_automation.geospatial.census import (
     area_from_counts,
     choose_epoch,
     choose_heating,
+    choose_unit_count,
     lookup_census_area,
     prior_from_counts,
 )
@@ -38,6 +39,11 @@ def _fuel(**kw):
     return base
 
 
+def _rooms(*counts):
+    """Households with 1, 2, ... 7 and 8+ rooms."""
+    return dict(zip(["1", "2", "3", "4", "5", "6", "7", "8+"], counts))
+
+
 def _sv(epoch=E.EPOCH_1990_2000, conf=0.6, heating=H.OIL_BOILER, observed=False):
     return StreetViewAnalysis(construction_epoch=epoch, confidence=conf,
                               heating_system_guess=heating, heating_observed=observed)
@@ -49,7 +55,11 @@ RK10 = prior_from_counts(_counts(pre80=7, e80=36, e90=34, e00=2))
 K7AC = prior_from_counts(_counts(e90=7, e00=102, post10=2))
 RK10_AREA = area_from_counts(_counts(pre80=7, e80=36, e90=34, e00=2),
                              _fuel(gas=30, oil=41, electricity=1, wood=2, lpg=2, coal=3),
-                             small_area="047054013", urban=True, urban_area="Tower")
+                             small_area="047054013", urban=True, urban_area="Tower",
+                             rooms=_rooms(0, 0, 3, 4, 28, 28, 11, 3))
+HYW6_AREA = area_from_counts(None, None, rooms=_rooms(0, 0, 4, 2, 51, 14, 5, 2))
+K7AC_AREA = area_from_counts(None, None, rooms=_rooms(0, 0, 1, 1, 39, 14, 10, 44))
+TP3C_AREA = area_from_counts(None, None, rooms=_rooms(0, 0, 6, 10, 62, 24, 5, 1))
 
 
 # --- era ---------------------------------------------------------------------------
@@ -133,6 +143,45 @@ def test_small_fuel_sample_ignored():
     assert choose_heating(area, None) == (H.OIL_BOILER, "census_urban")
 
 
+# --- home count --------------------------------------------------------------------
+
+@pytest.mark.parametrize("claude", [1, 2, 3, 4])
+def test_unseen_count_follows_room_mix(claude):
+    # HYW6: 17.4 x 9.15 m block, 65 % of the area's homes have 5 rooms -> 3 homes of 106 m2
+    assert choose_unit_count(17.4, 9.15, claude, False, HYW6_AREA, storeys=2) == (3, "census")
+
+
+def test_unseen_pairs_stay_pairs():
+    assert choose_unit_count(12.3, 10.0, 2, False, K7AC_AREA, storeys=2) == (2, "census")
+    assert choose_unit_count(12.5, 8.4, 2, False, TP3C_AREA, storeys=2) == (2, "census")
+
+
+def test_unseen_split_of_one_home_undone():
+    # RK10: Claude outlined one 8.9 x 7.5 m home and halved it to 4.5 m wide homes
+    assert choose_unit_count(8.9, 7.5, 2, False, RK10_AREA, storeys=2) == (1, "census")
+
+
+def test_claude_count_kept_when_seen_detached_or_no_rooms():
+    assert choose_unit_count(17.4, 9.15, 2, True, HYW6_AREA) == (2, "claude")
+    assert choose_unit_count(17.4, 9.15, 1, False, HYW6_AREA, detached=True) == (1, "claude")
+    assert choose_unit_count(17.4, 9.15, 2, False, None) == (2, "claude")
+    assert choose_unit_count(17.4, 9.15, 2, False, area_from_counts(None, None)) == (2, "claude")
+
+
+def test_frontage_limit_and_storeys():
+    flats = area_from_counts(None, None, rooms=_rooms(10, 40, 30, 5, 0, 0, 0, 0))
+    # Small homes, but splitting a 7 m block would leave 3.5 m frontages
+    assert choose_unit_count(7.0, 9.0, 1, False, flats, storeys=2) == (1, "census")
+    # A bungalow block has half the floor area of a 2-storey one: fewer, wider homes
+    two = choose_unit_count(17.4, 9.15, 2, False, HYW6_AREA, storeys=2)[0]
+    one = choose_unit_count(17.4, 9.15, 2, False, HYW6_AREA, storeys=1)[0]
+    assert one < two
+
+
+def test_rooms_too_few_households_ignored():
+    assert area_from_counts(None, None, rooms=_rooms(0, 0, 0, 0, 10, 5, 0, 0)).rooms_shares == {}
+
+
 # --- lookup ------------------------------------------------------------------------
 
 def _client(payload):
@@ -149,6 +198,7 @@ async def test_lookup_reads_small_area(monkeypatch):
     monkeypatch.setattr(census, "_year_built_table",
                         lambda: {"guid-1": _counts(pre80=29, e80=46, e90=3, e00=2, post10=0)})
     monkeypatch.setattr(census, "_heating_table", lambda: {"guid-1": _fuel(gas=66, oil=7)})
+    monkeypatch.setattr(census, "_rooms_table", lambda: {"guid-1": _rooms(0, 0, 4, 2, 51, 14, 5, 2)})
     client = _client({"features": [{"attributes": {
         "SA_GUID_2022": "guid-1", "SA_PUB2022": "048051004",
         "SA_URBAN_AREA_FLAG": 1, "SA_URBAN_AREA_NAME": "Cork city and suburbs"}}]})
@@ -157,6 +207,7 @@ async def test_lookup_reads_small_area(monkeypatch):
     assert area.urban and area.urban_area == "Cork city and suburbs"
     assert area.era.dominant_epoch == E.EPOCH_1980_1990
     assert area.heating_shares["gas"] == pytest.approx(66 / 73)
+    assert area.rooms_households == 78 and area.rooms_shares["5"] == pytest.approx(51 / 78)
     assert client.get.call_args.kwargs["params"]["geometry"] == "-8.5,51.9"
 
 
@@ -164,6 +215,7 @@ async def test_lookup_reads_small_area(monkeypatch):
 async def test_lookup_rural_area_without_name(monkeypatch):
     monkeypatch.setattr(census, "_year_built_table", lambda: {})
     monkeypatch.setattr(census, "_heating_table", lambda: {})
+    monkeypatch.setattr(census, "_rooms_table", lambda: {})
     client = _client({"features": [{"attributes": {
         "SA_GUID_2022": "g", "SA_PUB2022": "1", "SA_URBAN_AREA_FLAG": 0,
         "SA_URBAN_AREA_NAME": None}}]})
@@ -183,10 +235,11 @@ async def test_lookup_outside_ireland_or_failing_returns_none():
 
 def test_data_files_cover_all_small_areas():
     guid = "4c07d11e-1f14-851d-e053-ca3ca8c0ca7f"  # RK10
-    years, fuels = census._year_built_table(), census._heating_table()
-    assert len(years) > 18_000 and len(fuels) > 18_000
+    years, fuels, rooms = census._year_built_table(), census._heating_table(), census._rooms_table()
+    assert len(years) > 18_000 and len(fuels) > 18_000 and len(rooms) > 18_000
     assert years[guid] == _counts(pre80=7, e80=36, e90=34, e00=2, post10=0)
     assert fuels[guid] == _fuel(gas=30, oil=41, electricity=1, wood=2, lpg=2, coal=3)
+    assert rooms[guid] == _rooms(0, 0, 3, 4, 28, 28, 11, 3)
 
 
 # --- pipeline ----------------------------------------------------------------------

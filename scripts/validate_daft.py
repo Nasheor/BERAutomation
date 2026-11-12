@@ -163,6 +163,13 @@ def _summarise_result(result) -> dict:
         "footprint_conf": result.footprint.confidence if result.footprint else None,
         "street_conf": result.street_analysis.confidence if result.street_analysis else None,
     }
+    fp = result.footprint
+    if fp and fp.units_in_block is not None:
+        info["block"] = {
+            "length": fp.block_length_m, "width": fp.block_width_m,
+            "units": fp.units_in_block, "units_claude": fp.units_claude,
+            "units_visible": fp.units_visible, "units_source": fp.units_source,
+        }
     if result.ber_result:
         info["inputs"] = input_summary(result.ber_result.building_input)
         info["calc"] = calc_summary(result.ber_result.building_input)

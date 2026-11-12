@@ -11,9 +11,11 @@ import anthropic
 from ber_automation.config import get_settings
 import math
 
+from ber_automation.geospatial.census import choose_unit_count
 from ber_automation.geospatial.scale import satellite_meters_per_pixel
 from ber_automation.models import (
     BuildingType,
+    CensusArea,
     Country,
     ConstructionEpoch,
     FootprintResult,
@@ -374,6 +376,10 @@ Return ONLY a JSON object:
 {{
   "block_corners_px": [[x1, y1], [x2, y2], [x3, y3], [x4, y4]],
   "units_in_block": <integer >= 1>,
+  "units_visible": <true if you can SEE where every home in the block ends (party-wall lines, ridge \
+steps, hips, roof colour changes, or front plots clearly separated by walls or hedges), or the building \
+is detached; false if any boundary between homes is inferred from the block length, the typical home \
+width or the Street View hint>,
   "building_shape": "rectangular" or "l_shaped" or "irregular",
   "confidence": <float 0-1: how sure you are that you outlined the right building, that its edges \
 are clearly visible and that the home count is right; use <= 0.3 if the roof is hidden by trees \
@@ -384,6 +390,22 @@ or shadow>,
 
 def _lerp(a: tuple[float, float], b: tuple[float, float], t: float) -> tuple[float, float]:
     return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+
+
+def _block_edges_px(corners: list) -> tuple[float, float] | None:
+    """(long, short) mean edge lengths in pixels of a 4-corner outline; None if invalid."""
+    try:
+        pts = [(float(p[0]), float(p[1])) for p in corners]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if len(pts) != 4:
+        return None
+    c1, c2, c3, c4 = pts
+    edge_a = (math.dist(c1, c2) + math.dist(c4, c3)) / 2
+    edge_b = (math.dist(c2, c3) + math.dist(c1, c4)) / 2
+    if edge_a <= 0 or edge_b <= 0:
+        return None
+    return max(edge_a, edge_b), min(edge_a, edge_b)
 
 
 def _unit_from_block(
@@ -447,6 +469,8 @@ async def analyze_satellite(
     adjacent_side: str | None = None,
     estimated_units_in_row: int | None = None,
     country: Country | None = None,
+    census: CensusArea | None = None,
+    storeys: int | None = None,
 ) -> FootprintResult:
     """Send a satellite image to Claude Vision for building footprint analysis.
 
@@ -460,6 +484,9 @@ async def analyze_satellite(
         adjacent_side: Which side is shared ("length" or "width").
         estimated_units_in_row: Number of units in terrace row.
         country: Country context for the prompt (defaults to Ireland).
+        census: Census facts for the Small Area; its room mix picks the number of
+            homes in the outlined block when Claude cannot see where they end.
+        storeys: Storeys from Street View, for the per-home floor area (default 2).
 
     Returns:
         FootprintResult with estimated dimensions and confidence.
@@ -566,23 +593,38 @@ async def analyze_satellite(
     confidence = float(data.get("confidence", 0))
     building_shape = data.get("building_shape", "rectangular")
     contour_points: list[list[int]] = []
+    block: dict = {}
 
     if mpp is not None:
         corners = data.get("block_corners_px")
         try:
-            units = int(data.get("units_in_block") or 1)
+            claude_units = max(1, int(data.get("units_in_block") or 1))
         except (TypeError, ValueError):
-            units = 1
-        unit = (
-            _unit_from_block(corners, units, mpp, centre=(img_w / 2, img_h / 2))
-            if corners else None
+            claude_units = 1
+        visible = data.get("units_visible") is True
+        edges = _block_edges_px(corners) if corners else None
+        if edges is None:
+            return FootprintResult(
+                length_m=0, width_m=0, area_m2=0, confidence=0,
+                source="claude_vision",
+            )
+        block_long, block_short = edges[0] * mpp, edges[1] * mpp
+        units, units_source = choose_unit_count(
+            block_long, block_short, claude_units, visible, census,
+            storeys=storeys, detached=building_type == "detached",
         )
+        unit = _unit_from_block(corners, units, mpp, centre=(img_w / 2, img_h / 2))
         if unit is None:
             return FootprintResult(
                 length_m=0, width_m=0, area_m2=0, confidence=0,
                 source="claude_vision",
             )
         length, width, contour_points = unit
+        block = dict(
+            block_length_m=round(block_long, 1), block_width_m=round(block_short, 1),
+            units_in_block=units, units_claude=claude_units, units_visible=visible,
+            units_source=units_source,
+        )
     else:
         length = float(data.get("length_m", 0))
         width = float(data.get("width_m", 0))
@@ -609,6 +651,7 @@ async def analyze_satellite(
         source="claude_vision",
         building_shape=building_shape,
         contour_points=contour_points,
+        **block,
     )
 
 

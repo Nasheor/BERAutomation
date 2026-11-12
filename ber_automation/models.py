@@ -135,6 +135,13 @@ class FootprintResult(BaseModel):
     contour_points: list[list[int]] = Field(default_factory=list)
     source: str = "opencv"  # "opencv", "claude_vision", "fallback"
     building_shape: str = "rectangular"
+    # Claude roof-corner path: the attached block that was outlined and split into homes
+    block_length_m: Optional[float] = None
+    block_width_m: Optional[float] = None
+    units_in_block: Optional[int] = None   # homes the block was split into
+    units_claude: Optional[int] = None     # Claude's own count
+    units_visible: bool = False            # Claude could see where the homes end
+    units_source: str = ""                 # "claude", or "census" (Small Area room mix)
 
 
 class StreetViewAnalysis(BaseModel):
@@ -212,6 +219,8 @@ class CensusArea(BaseModel):
     era: Optional[CensusEraPrior] = None
     heating_households: int = 0   # households with a stated central-heating fuel
     heating_shares: dict[str, float] = Field(default_factory=dict)  # gas/oil/electricity/... -> 0-1
+    rooms_households: int = 0     # households with a stated number of rooms
+    rooms_shares: dict[str, float] = Field(default_factory=dict)  # "1".."7", "8+" -> 0-1
 
 
 class PipelineResult(BaseModel):

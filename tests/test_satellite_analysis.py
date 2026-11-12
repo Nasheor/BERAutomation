@@ -143,6 +143,42 @@ class TestAnalyzeSatellite:
             "messages"][0]["content"][1]["text"]
         assert "block_corners_px" in prompt
         assert "(320, 320)" in prompt
+        assert "units_visible" in prompt
+        assert result.units_in_block == 3 and result.units_source == "claude"
+
+    @pytest.mark.parametrize("visible, units, source", [(False, 3, "census"), (True, 2, "claude")])
+    @pytest.mark.asyncio
+    async def test_census_room_mix_sets_unseen_home_count(self, tmp_path, visible, units, source):
+        """HYW6: a 17.4 x 9.15 m block Claude calls 2 homes without seeing the party walls;
+        the Small Area's homes are mostly 5 rooms, so it is 3 homes of 5.8 m."""
+        from PIL import Image
+        from ber_automation.geospatial.census import area_from_counts
+        from ber_automation.geospatial.scale import satellite_meters_per_pixel
+
+        img = tmp_path / "satellite.png"
+        Image.new("RGB", (640, 640)).save(img)
+        mpp = satellite_meters_per_pixel(51.9, 20)
+        half_l, half_s = 17.4 / mpp / 2, 9.15 / mpp / 2
+        block = [[320 - half_l, 320 - half_s], [320 + half_l, 320 - half_s],
+                 [320 + half_l, 320 + half_s], [320 - half_l, 320 + half_s]]
+        mock_settings, mock_anthropic = _make_mock_anthropic(json.dumps({
+            "block_corners_px": block, "units_in_block": 2, "units_visible": visible,
+            "confidence": 0.6, "reasoning": "Test",
+        }))
+        area = area_from_counts(None, None, rooms={"1": 0, "2": 0, "3": 4, "4": 2, "5": 51,
+                                                   "6": 14, "7": 5, "8+": 2})
+
+        with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings), \
+             patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
+            from ber_automation.vision.claude_analyzer import analyze_satellite
+            result = await analyze_satellite(str(img), lat=51.9, zoom=20, census=area, storeys=2,
+                                             building_type="semi_d_length")
+
+        assert (result.units_in_block, result.units_source, result.units_claude) == (units, source, 2)
+        assert result.block_length_m == pytest.approx(17.4, abs=0.05)
+        assert result.block_width_m == pytest.approx(9.15, abs=0.06)
+        assert result.width_m == pytest.approx(17.4 / units, abs=0.1)
+        assert result.length_m == pytest.approx(9.15, abs=0.1)
 
     @pytest.mark.asyncio
     async def test_missing_corners_returns_zero_confidence(self, tmp_path):

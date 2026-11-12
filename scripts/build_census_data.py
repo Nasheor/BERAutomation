@@ -3,13 +3,14 @@
 - cso_year_built_sa2022.csv  <- SAP2022T6T2SA, households by year built. The CSO's 11
   bands are merged into the 5 construction epochs of the HWB tool.
 - cso_heating_sa2022.csv     <- SAP2022T6T5SA, households by central heating fuel.
+- cso_rooms_sa2022.csv       <- SAP2022T6T4SA, households by number of rooms (1-7, 8+).
 
 Only household counts (statistic ...C01) are used; the tables also hold person counts
 (...C02). "Not stated" and "Total" are dropped. About 18,900 Small Areas of 80-120 homes.
 
 Usage:
     python scripts/build_census_data.py [--source-dir DIR]
-    (DIR holds SAP2022T6T2SA.csv / SAP2022T6T5SA.csv; otherwise they are downloaded)
+    (DIR holds SAP2022T6T2SA.csv, SAP2022T6T4SA.csv and SAP2022T6T5SA.csv; otherwise they are downloaded)
 
 Licence: CSO open data, CC BY 4.0. Attribution: Central Statistics Office, Census 2022.
 """
@@ -45,6 +46,13 @@ TABLES = {
         "map": {
             "NGCH": "gas", "OCH": "oil", "ECH": "electricity", "WCH": "wood",
             "LPGCH": "lpg", "CCH": "coal", "PCH": "peat", "OTH": "other", "NCH": "none",
+        },
+    },
+    "SAP2022T6T4SA": {
+        "out": DATA / "cso_rooms_sa2022.csv",
+        "column": "C03771V04520",  # number of rooms
+        "map": {
+            "1R": "1", "2R": "2", "3R": "3", "4R": "4", "5R": "5", "6R": "6", "7R": "7", "GE8R": "8+",
         },
     },
 }

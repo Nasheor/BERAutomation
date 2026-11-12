@@ -152,14 +152,17 @@ class BERPipeline:
                 sat_kwargs["building_type"] = sa.building_type.value
                 sat_kwargs["adjacent_side"] = sa.adjacent_side
                 sat_kwargs["estimated_units_in_row"] = sa.estimated_units_in_row
+                sat_kwargs["storeys"] = sa.estimated_storeys
 
-            # Primary: Claude Vision satellite analysis
+            # Primary: Claude Vision satellite analysis. The census room mix picks the
+            # number of homes in the outlined block when Claude can't see where they end.
             try:
                 claude_fp = await analyze_satellite(
                     result.satellite_image_path,
                     lat=coords.lat,
                     zoom=satellite_zoom,
                     country=country,
+                    census=result.census,
                     **sat_kwargs,
                 )
             except Exception as e:
@@ -346,15 +349,7 @@ class BERPipeline:
             if agreement:
                 # Boost confidence when both methods agree
                 boosted = min(1.0, claude_fp.confidence + 0.15)
-                return FootprintResult(
-                    length_m=claude_fp.length_m,
-                    width_m=claude_fp.width_m,
-                    area_m2=claude_fp.area_m2,
-                    confidence=round(boosted, 2),
-                    source="claude_vision",
-                    building_shape=claude_fp.building_shape,
-                    contour_points=claude_fp.contour_points,
-                )
+                return claude_fp.model_copy(update={"confidence": round(boosted, 2)})
             else:
                 # Disagreement: trust Claude
                 return claude_fp
