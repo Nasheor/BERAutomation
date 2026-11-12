@@ -1235,9 +1235,25 @@ if mode == "Full Pipeline":
                 sa = pr.street_analysis
                 a_cols = st.columns(4)
                 a_cols[0].metric("Type", BUILDING_TYPE_LABELS.get(sa.building_type.value, sa.building_type.value))
-                a_cols[1].metric("Era", EPOCH_LABELS.get(sa.construction_epoch.value, sa.construction_epoch.value))
+                # Era used by the calculation (census prior may override the photo reading)
+                used_epoch = (pr.ber_result.building_input.construction_epoch
+                              if pr.ber_result else sa.construction_epoch)
+                a_cols[1].metric("Era", EPOCH_LABELS.get(used_epoch.value, used_epoch.value))
                 a_cols[2].metric("Storeys", sa.estimated_storeys)
                 a_cols[3].metric("Heating", HEATING_LABELS.get(sa.heating_system_guess.value, sa.heating_system_guess.value))
+                if pr.era_prior:
+                    ep = pr.era_prior
+                    mix = ", ".join(
+                        f"{EPOCH_LABELS.get(k, k)} {v:.0%}"
+                        for k, v in sorted(ep.shares.items(), key=lambda kv: -kv[1]) if v >= 0.05
+                    )
+                    source = {"census": "census", "streetview": "Street View",
+                              "override": "your override"}.get(pr.epoch_source or "", pr.epoch_source)
+                    st.caption(
+                        f"Era from {source}. Census 2022, Small Area {ep.small_area} "
+                        f"({ep.households} homes): {mix}. Street View read: "
+                        f"{EPOCH_LABELS.get(sa.construction_epoch.value, sa.construction_epoch.value)}."
+                    )
                 if sa.reasoning:
                     st.caption(sa.reasoning)
 

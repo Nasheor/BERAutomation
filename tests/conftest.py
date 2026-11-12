@@ -13,6 +13,15 @@ from ber_automation.models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_census_network(monkeypatch):
+    """Keep pipeline tests offline: no census Small Area lookup unless a test opts in."""
+    async def _none(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("ber_automation.pipeline.lookup_era_prior", _none)
+
+
 @pytest.fixture
 def typical_irish_house() -> BuildingInput:
     """A typical pre-1980 Irish detached house."""

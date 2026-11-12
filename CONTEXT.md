@@ -221,6 +221,26 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   confidence ≤ 0.5 — this lands at 0.40–0.45, just above the 0.4 gate in `_build_input()`;
   below it, the defaults (detached, before_1980) would be used instead.
 
+### Construction Era: Census Prior (`ber_automation/geospatial/census.py`, Ireland only)
+- Street View can't separate adjacent decades (replacement PVC windows, re-tiled roofs);
+  Claude read every 1980s house as 1990s and prompt changes didn't move it.
+- **Data:** CSO Census 2022 table SAP2022T6T2SA (households by year built, per Small Area of
+  80–120 homes), merged into the 5 HWB epochs →
+  `ber_automation/data/cso_year_built_sa2022.csv` (18,920 areas, ~1 MB, CC BY 4.0).
+  Rebuild: `python scripts/build_census_year_built.py`. The table also holds person counts
+  (`...C02`); only households (`...C01`) are used.
+- **Lookup:** point → Small Area via the CSO/Tailte Éireann ArcGIS service
+  `SMALL_AREA_2022_Genralised_20m_view` (sic), run in parallel with the Street View call.
+  Any failure → None (falls back to Street View). Non-Irish countries → None.
+- **`choose_epoch(prior, analysis)`:** no usable Street View reading (conf < 0.4) → dominant
+  census period; Claude's band adjacent to the dominant one → dominant, unless that band is
+  ≥ 25 % of the area and conf ≥ 0.8; two or more bands away → Claude if ≥ 10 % of the area
+  is from that period, else dominant. Fewer than 20 stated households → no prior.
+- `PipelineResult.era_prior` / `epoch_source` ("census" | "streetview" | "default" |
+  "override") record the decision; the app's Era card shows the era used plus the census mix.
+- The layer also has `SA_URBAN_AREA_NAME` (stored as `era_prior.urban_area`), which could
+  fix the urban/rural heating default (RK10 is in the "Tower" urban area).
+
 ### Window Detection (`detect_windows()`, display only)
 - Runs on the **front view only** (`streetview_0`); the other headings never show the property.
   1 Claude call per property instead of 4.
@@ -349,13 +369,21 @@ Report: `report.json` (previous run kept as `report_after_footprint_fix.json`).
     TP3C 1995-2005, AX03 1998-2008, K7AC 2000-08, so taking the lower bound fixes HYW6 only
     and risks AX03. Next idea: a per-location prior from CSO Census 2022 Small Area
     "year built" data. Reports: report_era_v1.json, report_era_v2.json.
+    **Fixed 2026-11-12 by the census prior** (see Construction Era above).
   - RK10 storeys: Claude sees a dormer bungalow with rooms in the roof and says 2; the
     assessor used 1. Needs a rule for dormers (the Excel has no 1.5-storey option).
   - RK10 heating: Claude calls Kilnamucky "a small rural locality" → oil; assessor: gas.
   - HYW6: the property is privacy-blurred in Street View; type/era come from the neighbours.
 
+**Part B — with the census era prior (2026-11-12, 3 runs each):**
+Report: `report.json` (previous: `report_classify_labels.json`).
+- Era correct 4/5 in all runs (was 2/5): HYW6, RK10 → 1980s. TP3C stays 1990s: its Small
+  Area is 82 % 1991–2000 builds, but the assessor says 1980s.
+- BER exact 3/5 (K7AC, RK10 B2, TP3C), within one band 5/5. HYW6 B1 (95 kWh/m²a; B2
+  starts at 100), held back by its +47 % footprint. AX03 A3 vs B1 (terraced vs semi-d).
+
 ### Test Coverage
-- 87 tests total (`tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 98 tests total (`tests/test_census_era.py`: prior shares, the choose_epoch rules, lookup with mocked service, data file, `_build_input` + override; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0),

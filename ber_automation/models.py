@@ -195,6 +195,16 @@ class BERResult(BaseModel):
     retrofit_native_epc_band: Optional[str] = None
 
 
+class CensusEraPrior(BaseModel):
+    """Build-period mix of the homes in the property's census Small Area (Ireland)."""
+    small_area: str = ""          # CSO Small Area code (SA_PUB2022)
+    urban_area: str = ""          # CSO urban area name, e.g. "Cork city and suburbs"; "" if rural
+    households: int = 0           # households with a stated year built
+    shares: dict[str, float] = Field(default_factory=dict)  # epoch value -> share 0-1
+    dominant_epoch: ConstructionEpoch = ConstructionEpoch.BEFORE_1980
+    dominant_share: float = 0.0
+
+
 class PipelineResult(BaseModel):
     """Complete pipeline output."""
     address: str
@@ -203,5 +213,7 @@ class PipelineResult(BaseModel):
     streetview_image_path: Optional[str] = None
     footprint: Optional[FootprintResult] = None
     street_analysis: Optional[StreetViewAnalysis] = None
+    era_prior: Optional[CensusEraPrior] = None
+    epoch_source: Optional[str] = None  # "census", "streetview", "default" or "override"
     ber_result: Optional[BERResult] = None
     errors: list[str] = Field(default_factory=list)

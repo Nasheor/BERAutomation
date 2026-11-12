@@ -9,3 +9,6 @@ requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
 include = ["ber_automation*"]
+
+[tool.setuptools.package-data]
+ber_automation = ["data/*.csv"]
