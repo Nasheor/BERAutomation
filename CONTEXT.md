@@ -507,8 +507,9 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
   the app's *Share* menu can open it. The free tier allows one private app. Every Full Pipeline
   run spends Anthropic, Google and Mapbox credit on the keys below.
 - **Keys:** `GOOGLE_MAPS_API_KEY`, `MAPBOX_ACCESS_TOKEN`, `ANTHROPIC_API_KEY` are pasted into the
-  app's *Secrets* as TOML. Streamlit Cloud exposes them as environment variables, which
-  `Settings` reads (no `.env` on the server). `.streamlit/secrets.toml` is the local,
+  app's *Secrets* as TOML. At start-up `app/streamlit_app.py` copies them from `st.secrets` into the
+  environment and clears the cached `Settings` (no `.env` on the server). Without this the
+  first live run failed with "GOOGLE_MAPS_API_KEY not configured". `.streamlit/secrets.toml` is the local,
   git-ignored copy to paste from; regenerate it from `.env` if a key changes, and update the
   app's Secrets too.
 - **Build inputs:** `requirements.txt`; `packages.txt` (apt) holds only `libglib2.0-0`.

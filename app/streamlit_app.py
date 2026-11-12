@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -12,6 +13,29 @@ import streamlit as st
 # The app lives in app/ and imports ber_automation from the repo root: put that root first
 # on the path so the code next to this file is used, whatever folder Streamlit starts in.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from ber_automation.config import get_settings
+
+API_KEY_NAMES = ("GOOGLE_MAPS_API_KEY", "MAPBOX_ACCESS_TOKEN", "ANTHROPIC_API_KEY")
+
+
+def _load_secrets_into_env() -> None:
+    """Copy API keys from Streamlit secrets (Streamlit Cloud) into the environment.
+
+    Settings reads environment variables and is cached for the process, so keys added or
+    changed in the cloud's Secrets after start-up would otherwise never be seen.
+    """
+    try:
+        secrets = {name: str(st.secrets[name]) for name in API_KEY_NAMES if name in st.secrets}
+    except Exception:  # no secrets.toml locally: keys come from .env instead
+        return
+    changed = {k: v for k, v in secrets.items() if v and os.environ.get(k) != v}
+    if changed:
+        os.environ.update(changed)
+        get_settings.cache_clear()
+
+
+_load_secrets_into_env()
 
 from ber_automation.ber_engine.calculator import HWBCalculator
 from ber_automation.ber_engine.constants import BER_BANDS
