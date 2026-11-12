@@ -142,6 +142,7 @@ class FootprintResult(BaseModel):
     units_claude: Optional[int] = None     # Claude's own count
     units_visible: bool = False            # Claude could see where the homes end
     units_source: str = ""                 # "claude", or "census" (Small Area room mix)
+    block_clipped: bool = False            # outline reaches the image edge: part of a longer row
 
 
 class StreetViewAnalysis(BaseModel):

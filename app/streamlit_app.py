@@ -1237,6 +1237,9 @@ if mode == "Full Pipeline":
                                   f"in this census Small Area is used")
                     elif fp.units_source == "census":
                         homes += " (AI count, consistent with the census home sizes)"
+                    if fp.block_clipped:
+                        homes += (". The row runs off the satellite image, so this is only "
+                                  "part of it and the size is uncertain")
                     st.caption(homes + ".")
 
         # --- AI Building Analysis ---

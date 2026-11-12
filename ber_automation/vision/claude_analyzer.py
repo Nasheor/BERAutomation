@@ -388,6 +388,24 @@ or shadow>,
 }}"""
 
 
+# A block outline with a corner this close to the image border (fraction of the image size)
+# is cut off by the frame: the row runs on beyond it, so neither its length nor the homes in
+# it were measured. Its confidence is capped below the 0.4 reconciliation threshold, so the
+# OpenCV footprint is used instead. Whole blocks in the validation images stay >= 49 px
+# (of 640) clear of the border; T23 AX03's cut-off terrace has corners at 0-2 px.
+CLIPPED_EDGE_MARGIN = 0.02
+CLIPPED_BLOCK_CONFIDENCE = 0.3
+
+
+def _reaches_image_edge(corners: list, img_w: int, img_h: int) -> bool:
+    """True when a corner of the block outline lies on, near or past the image border."""
+    mx, my = img_w * CLIPPED_EDGE_MARGIN, img_h * CLIPPED_EDGE_MARGIN
+    return any(
+        x <= mx or y <= my or x >= img_w - mx or y >= img_h - my
+        for x, y in ((float(p[0]), float(p[1])) for p in corners)
+    )
+
+
 def _lerp(a: tuple[float, float], b: tuple[float, float], t: float) -> tuple[float, float]:
     return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
 
@@ -609,10 +627,17 @@ async def analyze_satellite(
                 source="claude_vision",
             )
         block_long, block_short = edges[0] * mpp, edges[1] * mpp
-        units, units_source = choose_unit_count(
-            block_long, block_short, claude_units, visible, census,
-            storeys=storeys, detached=building_type == "detached",
-        )
+        clipped = _reaches_image_edge(corners, img_w, img_h)
+        if clipped:
+            # Only part of the row is outlined, so block area / n says nothing about the
+            # size of the homes: keep Claude's count and let OpenCV take over.
+            units, units_source = claude_units, "claude"
+            confidence = min(confidence, CLIPPED_BLOCK_CONFIDENCE)
+        else:
+            units, units_source = choose_unit_count(
+                block_long, block_short, claude_units, visible, census,
+                storeys=storeys, detached=building_type == "detached",
+            )
         unit = _unit_from_block(corners, units, mpp, centre=(img_w / 2, img_h / 2))
         if unit is None:
             return FootprintResult(
@@ -623,7 +648,7 @@ async def analyze_satellite(
         block = dict(
             block_length_m=round(block_long, 1), block_width_m=round(block_short, 1),
             units_in_block=units, units_claude=claude_units, units_visible=visible,
-            units_source=units_source,
+            units_source=units_source, block_clipped=clipped,
         )
     else:
         length = float(data.get("length_m", 0))

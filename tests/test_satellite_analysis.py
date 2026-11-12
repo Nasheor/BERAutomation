@@ -179,6 +179,39 @@ class TestAnalyzeSatellite:
         assert result.block_width_m == pytest.approx(9.15, abs=0.06)
         assert result.width_m == pytest.approx(17.4 / units, abs=0.1)
         assert result.length_m == pytest.approx(9.15, abs=0.1)
+        assert not result.block_clipped and result.confidence == 0.6
+
+    @pytest.mark.asyncio
+    async def test_block_cut_off_by_image_edge_defers_to_opencv(self, tmp_path):
+        """AX03: the terrace runs off the top of the image and Claude stops the outline there.
+        The block length is not measured, so the census must not re-split it and the
+        confidence drops below the 0.4 reconciliation threshold (OpenCV is used)."""
+        from PIL import Image
+        from ber_automation.geospatial.census import area_from_counts
+
+        img = tmp_path / "satellite.png"
+        Image.new("RGB", (640, 640)).save(img)
+        block = [[364, 1], [500, 509], [338, 552], [186, 0]]
+        mock_settings, mock_anthropic = _make_mock_anthropic(json.dumps({
+            "block_corners_px": block, "units_in_block": 6, "units_visible": False,
+            "confidence": 0.4, "reasoning": "Row continues in both directions",
+        }))
+        # Tivoli: mostly 5-7-room homes, which would turn this block into 4 big homes
+        area = area_from_counts(None, None, rooms={"1": 0, "2": 4, "3": 14, "4": 13, "5": 47,
+                                                   "6": 16, "7": 27, "8+": 8})
+
+        with patch("ber_automation.vision.claude_analyzer.get_settings", return_value=mock_settings), \
+             patch("ber_automation.vision.claude_analyzer.anthropic", mock_anthropic):
+            from ber_automation.vision.claude_analyzer import analyze_satellite
+            result = await analyze_satellite(str(img), lat=51.909, zoom=20, census=area, storeys=2,
+                                             building_type="terraced_length")
+
+        assert result.block_clipped
+        assert (result.units_in_block, result.units_source) == (6, "claude")
+        assert result.confidence == 0.3
+        opencv = FootprintResult(length_m=5.8, width_m=5.7, area_m2=33.1, confidence=0.71,
+                                 source="opencv")
+        assert BERPipeline._reconcile_footprints(result, opencv) is opencv
 
     @pytest.mark.asyncio
     async def test_missing_corners_returns_zero_confidence(self, tmp_path):
@@ -195,6 +228,18 @@ class TestAnalyzeSatellite:
             result = await analyze_satellite(str(img), lat=53.35, zoom=20)
 
         assert result.confidence == 0
+
+
+@pytest.mark.parametrize("corners, clipped", [
+    ([[364, 1], [500, 509], [338, 552], [186, 0]], True),      # on the top edge
+    ([[-20, 200], [300, 200], [300, 400], [-20, 400]], True),  # past the left edge
+    ([[300, 200], [635, 200], [635, 400], [300, 400]], True),  # 5 px from the right edge
+    ([[52, 190], [427, 190], [427, 386], [52, 386]], False),   # HYW6: whole block, 52 px clear
+])
+def test_reaches_image_edge(corners, clipped):
+    from ber_automation.vision.claude_analyzer import _reaches_image_edge
+
+    assert _reaches_image_edge(corners, 640, 640) is clipped
 
 
 def test_mapbox_scale_is_half_google_scale():

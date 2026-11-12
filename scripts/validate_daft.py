@@ -169,6 +169,7 @@ def _summarise_result(result) -> dict:
             "length": fp.block_length_m, "width": fp.block_width_m,
             "units": fp.units_in_block, "units_claude": fp.units_claude,
             "units_visible": fp.units_visible, "units_source": fp.units_source,
+            "clipped": fp.block_clipped,
         }
     if result.ber_result:
         info["inputs"] = input_summary(result.ber_result.building_input)

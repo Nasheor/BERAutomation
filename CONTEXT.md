@@ -175,8 +175,15 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   estimates metres from cars, doors, bins etc. and is told to measure one unit.
 - Returns `FootprintResult` with `source="claude_vision"`
 - Validation: dimensions clamped to [4m, 25m], area sanity check [20, 500] m2
-- Known limit: a long block that runs off both ends of the image with no chimneys to count
-  (T23 AX03) → Claude gives confidence ≤ 0.3 and OpenCV is used. A zoom-19 image would help.
+- **Image-edge guard (`_reaches_image_edge()`):** the prompt tells Claude to stop the outline at
+  the image edge when a row runs off it. A corner within 2 % of the image size (13 px of 640)
+  of the border means the outline is only part of the row: its length and home count were
+  not measured. Claude's count is kept (no census re-split), confidence is capped at 0.3
+  (below the 0.4 reconciliation threshold, so OpenCV is used) and `block_clipped` is set.
+  Whole blocks in the validation images stay ≥ 49 px clear of the border; AX03's cut-off
+  terrace has corners at 0–2 px. Before the guard this relied on Claude rating such blocks
+  ≤ 0.3 itself, which stopped happening once `units_visible` was added. A zoom-19 image
+  would let the whole row be measured.
 
 **Secondary: OpenCV (`ber_automation/vision/footprint.py::extract_footprint()`)**
 - Canny edge detection + contour scoring (solidity, centrality, rectangularity, relative area)
@@ -442,15 +449,43 @@ Report: `report.json` (previous: `report_census_heating.json`). Claude said
   outline covers 87 % of the 29.5 m frame and is only part of the row, and Tivoli's Small Area
   (047277001) is mostly 5–7-room homes, so 4 homes of 105 m² fit it best, while AX03 is a
   56 m² home (likelihood 0.18 vs 0.65). Claude's own count (6) would give +25 %.
-  Candidate fix: treat a block outline that reaches the image edge as unmeasured (keep
-  Claude's count and/or cap confidence at 0.3 → OpenCV). Only AX03 is affected on this set.
+  **Fixed by the image-edge guard** (next section).
+
+**Part B — with the image-edge guard (2026-11-12, 3 runs each):**
+Report: `report.json` (previous: `report_census_units.json`).
+
+| Eircode | Footprint source | Footprint area (before → now) | BER assessor → pipeline |
+|---|---|---|---|
+| T23 HYW6 | Claude, 3 homes (census) | −2…−3% → −1…−2% | B2 → B2 |
+| T23 RK10 | Claude, 1 home (census) | +26…+29% → +25…+29% | B2 → B1 |
+| T12 K7AC | Claude, 2 homes | +3…+4% → +3…+5% | A3 → A3 |
+| T23 AX03 | OpenCV (Claude block clipped) | +80…+90% → +18% | B1 → A3 |
+| T12 TP3C | OpenCV (Claude block clipped) | −13…−16% → −3%, +27%, −3% | B1 → B1 |
+
+- BER exact 3/5 (HYW6, K7AC, TP3C), within one band 5/5 — same as before the guard.
+- Footprint mean |error| (median run) 27 % → 11 %.
+- AX03 is back to the OpenCV result in all runs (block corners at the top edge).
+- **TP3C changed for a reason outside the guard:** in this session Claude outlined its
+  semi-d pair together with the offset building attached above it, running off the top
+  edge (17.4 × 10.0 m, "the building continues off the top edge"), in all 3 runs. Earlier
+  sessions outlined only the pair (12.2 × 9.0 m, 82 px clear of the edge) on what looks like
+  the same image (the earlier outline lines up with this image's roof edges), same prompt,
+  temperature 0. The guard caught it: split in 2, the clipped block would give 87 m² (+38 %).
+  OpenCV then gave −3 % twice; once its confidence was 0.38, under the 0.4 gate in
+  `_build_input()`, so the 10 × 8 m default was used (+27 %).
+- OpenCV is passed Claude's dimensions as the expected size (`expected_length_m/width_m`),
+  so its contour choice and confidence follow Claude's answer even when that answer was
+  rejected. For a clipped block those dimensions are not measured; not passing them is a
+  possible next step (untested).
 
 ### Test Coverage
-- 116 tests total (`tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 121 tests total (`tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0;
-    census room mix sets the home count only when `units_visible` is false),
+    census room mix sets the home count only when `units_visible` is false; a block outline at
+    the image edge keeps Claude's count, is capped at 0.3 and loses to OpenCV;
+    `_reaches_image_edge()` on, past and near the border and for a whole block),
     malformed JSON, Mapbox scale = half the Google scale (mocked async Claude API)
   - `analyze_streetview()` — single image backward-compat, multi-image (4 views sent), malformed JSON defaults,
     `location` in the prompt only when given, `claude_temperature` sent only when set
