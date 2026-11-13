@@ -16,7 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ber_automation.config import get_settings
 
-API_KEY_NAMES = ("GOOGLE_MAPS_API_KEY", "MAPBOX_ACCESS_TOKEN", "ANTHROPIC_API_KEY")
+API_KEY_NAMES = (
+    "GOOGLE_MAPS_API_KEY", "MAPBOX_ACCESS_TOKEN", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY",
+)
 
 
 def _load_secrets_into_env() -> None:
@@ -51,6 +53,7 @@ from ber_automation.models import (
     RetrofitInput,
 )
 from ber_automation.pipeline import BERPipeline
+from ber_automation.vision.providers import PROVIDER_LABELS, available_providers
 
 # ---------------------------------------------------------------------------
 # Human-readable label dictionaries
@@ -1121,10 +1124,25 @@ if mode == "Full Pipeline":
         st.markdown('<div style="margin-top:28px;"></div>', unsafe_allow_html=True)
         run_btn = st.button("Analyse", type="primary", use_container_width=True)
 
+    # Vision model: offered only when more than one provider has an API key
+    _providers = available_providers(get_settings())
+    if len(_providers) > 1:
+        pipeline_provider = st.radio(
+            "AI model",
+            _providers,
+            format_func=lambda p: PROVIDER_LABELS.get(p, p),
+            horizontal=True,
+            help="The vision model that reads the satellite and Street View images. "
+                 "Both models get the same images and the same instructions.",
+            key="pipeline_provider",
+        )
+    else:
+        pipeline_provider = _providers[0] if _providers else None
+
     if run_btn and address:
         with st.status("Running BER pipeline\u2026", expanded=True) as status:
             st.write("Geocoding address and fetching imagery\u2026")
-            pipeline = BERPipeline(output_dir=Path("output"))
+            pipeline = BERPipeline(output_dir=Path("output"), provider=pipeline_provider)
             result = _run_async(pipeline.run(address, country=Country(pipeline_country)))
             st.session_state.pipeline_result = result
             st.session_state.whatif_history = []
@@ -1242,7 +1260,7 @@ if mode == "Full Pipeline":
 
                 try:
                     with st.status("Re-analysing with uploaded images…", expanded=True) as reanalyse_status:
-                        pipeline = BERPipeline(output_dir=out_dir)
+                        pipeline = BERPipeline(output_dir=out_dir, provider=pipeline_provider)
                         new_result = _run_async(pipeline.reanalyse(
                             pr,
                             country=Country(pipeline_country),
@@ -1295,6 +1313,11 @@ if mode == "Full Pipeline":
                 st.markdown("<div class='section-header'><h3>AI Building Analysis</h3></div>",
                             unsafe_allow_html=True)
                 sa = pr.street_analysis
+                if pr.llm_provider:
+                    st.caption(
+                        f"Analysed with {PROVIDER_LABELS.get(pr.llm_provider, pr.llm_provider)}"
+                        f" ({pr.llm_model})."
+                    )
                 a_cols = st.columns(4)
                 a_cols[0].metric("Type", BUILDING_TYPE_LABELS.get(sa.building_type.value, sa.building_type.value))
                 # Era and heating used by the calculation (census may override the photos)

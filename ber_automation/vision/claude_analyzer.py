@@ -23,6 +23,13 @@ from ber_automation.models import (
     HouseDescription,
     StreetViewAnalysis,
 )
+from ber_automation.vision.providers import (
+    KEY_ENV_NAMES,
+    api_key,
+    media_type,
+    mistral_complete,
+    resolve_provider,
+)
 
 COUNTRY_NAMES: dict[Country, str] = {
     Country.IRELAND: "Irish",
@@ -58,6 +65,53 @@ def _sampling_kwargs(settings) -> dict:
     """Sampling params for messages.create(); empty when the temperature setting is unset."""
     temperature = settings.claude_temperature
     return {"temperature": temperature} if isinstance(temperature, (int, float)) else {}
+
+
+def _require_provider(provider: str | None, settings) -> str:
+    """The provider to use (see resolve_provider); raises when its API key is missing."""
+    provider = resolve_provider(provider, settings)
+    if not api_key(provider, settings):
+        raise ValueError(f"{KEY_ENV_NAMES[provider]} not configured")
+    return provider
+
+
+def _strip_code_fence(text: str) -> str:
+    """Drop a markdown code fence wrapped around a JSON reply."""
+    if text.startswith("```"):
+        return "\n".join(text.split("\n")[1:-1])
+    return text
+
+
+async def _complete(parts: list[str | Path], provider: str, settings) -> str:
+    """Send text and images, in the order given, to the chosen model; return its reply text.
+
+    Both providers get the same parts in the same order, so results can be compared.
+    """
+    if provider == "mistral":
+        return _strip_code_fence(await mistral_complete(settings, parts))
+
+    content: list[dict] = []
+    for part in parts:
+        if isinstance(part, Path):
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type(part),
+                    "data": base64.standard_b64encode(part.read_bytes()).decode("utf-8"),
+                },
+            })
+        else:
+            content.append({"type": "text", "text": part})
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    message = await client.messages.create(
+        model=settings.claude_model,
+        max_tokens=16000,
+        **_sampling_kwargs(settings),
+        messages=[{"role": "user", "content": content}],
+    )
+    return _strip_code_fence(_response_text(message))
 
 
 _ANALYSIS_BODY = """
@@ -183,6 +237,7 @@ async def analyze_streetview(
     image_paths: str | Path | list[str | Path],
     country: Country | None = None,
     location: str | None = None,
+    provider: str | None = None,
 ) -> StreetViewAnalysis:
     """Send Street View image(s) to Claude Vision for building analysis.
 
@@ -195,69 +250,38 @@ async def analyze_streetview(
         country: Country context for the prompt (defaults to Ireland).
         location: Geocoded address, used for urban/rural context when no
             heating system is visible.
+        provider: Vision model provider, "claude" or "mistral" (default: the
+            LLM_PROVIDER setting).
 
     Returns:
         StreetViewAnalysis with building classification and confidence.
     """
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise ValueError("ANTHROPIC_API_KEY not configured")
+    provider = _require_provider(provider, settings)
 
     # Normalise to a list
     if isinstance(image_paths, (str, Path)):
         image_paths = [image_paths]
     image_paths = [Path(p) for p in image_paths]
 
-    media_types_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
-
-    # Build content blocks: one image block per file (labelled by heading when there
-    # are several), then the text prompt
+    # One image per file (labelled by heading when there are several), then the prompt,
+    # which depends on single vs multi-image
     multi = len(image_paths) > 1
-    content: list[dict] = []
+    parts: list[str | Path] = []
     for idx, img_path in enumerate(image_paths):
-        image_data = base64.standard_b64encode(img_path.read_bytes()).decode("utf-8")
-        suffix = img_path.suffix.lower()
-        media_type = media_types_map.get(suffix, "image/jpeg")
         if multi:
-            content.append({"type": "text", "text": _view_label(img_path, idx)})
-        content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": image_data,
-            },
-        })
-
-    # Choose prompt based on single vs multi-image
+            parts.append(_view_label(img_path, idx))
+        parts.append(img_path)
     country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
-    prompt_text = _build_streetview_prompt(
-        country_adj, multi=multi, location=location,
-    )
-    content.append({"type": "text", "text": prompt_text})
+    parts.append(_build_streetview_prompt(country_adj, multi=multi, location=location))
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
-    message = await client.messages.create(
-        model=settings.claude_model,
-        max_tokens=16000,
-        **_sampling_kwargs(settings),
-        messages=[{"role": "user", "content": content}],
-    )
-
-    # Parse response
-    response_text = _response_text(message)
-
-    # Handle potential markdown code blocks
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        response_text = "\n".join(lines[1:-1])
+    response_text = await _complete(parts, provider, settings)
 
     try:
         data = json.loads(response_text)
     except json.JSONDecodeError:
         return StreetViewAnalysis(
-            reasoning=f"Failed to parse Claude response: {response_text[:200]}"
+            reasoning=f"Failed to parse model response: {response_text[:200]}"
         )
 
     # Map to enums with defaults
@@ -392,6 +416,7 @@ async def describe_house(
     analysis: StreetViewAnalysis | None = None,
     country: Country | None = None,
     location: str | None = None,
+    provider: str | None = None,
 ) -> HouseDescription | None:
     """Describe the target house, filling hidden parts from a house of the same design.
 
@@ -407,49 +432,29 @@ async def describe_house(
         analysis: The classification from analyze_streetview(), given as context.
         country: Country context for the prompt (defaults to Ireland).
         location: Geocoded address.
+        provider: Vision model provider, "claude" or "mistral" (default: the
+            LLM_PROVIDER setting).
 
     Returns:
         HouseDescription, or None when the reply could not be read.
     """
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise ValueError("ANTHROPIC_API_KEY not configured")
+    provider = _require_provider(provider, settings)
 
     if isinstance(image_paths, (str, Path)):
         image_paths = [image_paths]
     image_paths = [Path(p) for p in image_paths]
-    media_types_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
 
     multi = len(image_paths) > 1
-    content: list[dict] = []
+    parts: list[str | Path] = []
     for idx, img_path in enumerate(image_paths):
-        image_data = base64.standard_b64encode(img_path.read_bytes()).decode("utf-8")
         if multi:
-            content.append({"type": "text", "text": _view_label(img_path, idx)})
-        content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_types_map.get(img_path.suffix.lower(), "image/jpeg"),
-                "data": image_data,
-            },
-        })
+            parts.append(_view_label(img_path, idx))
+        parts.append(img_path)
     country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
-    content.append({
-        "type": "text",
-        "text": _build_description_prompt(country_adj, multi, location, analysis),
-    })
+    parts.append(_build_description_prompt(country_adj, multi, location, analysis))
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    message = await client.messages.create(
-        model=settings.claude_model,
-        max_tokens=16000,
-        **_sampling_kwargs(settings),
-        messages=[{"role": "user", "content": content}],
-    )
-    response_text = _response_text(message)
-    if response_text.startswith("```"):
-        response_text = "\n".join(response_text.split("\n")[1:-1])
+    response_text = await _complete(parts, provider, settings)
     try:
         data = json.loads(response_text)
     except json.JSONDecodeError:
@@ -668,6 +673,7 @@ async def analyze_satellite(
     country: Country | None = None,
     census: CensusArea | None = None,
     storeys: int | None = None,
+    provider: str | None = None,
 ) -> FootprintResult:
     """Send a satellite image to Claude Vision for building footprint analysis.
 
@@ -684,20 +690,16 @@ async def analyze_satellite(
         census: Census facts for the Small Area; its room mix picks the number of
             homes in the outlined block when Claude cannot see where they end.
         storeys: Storeys from Street View, for the per-home floor area (default 2).
+        provider: Vision model provider, "claude" or "mistral" (default: the
+            LLM_PROVIDER setting).
 
     Returns:
         FootprintResult with estimated dimensions and confidence.
     """
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise ValueError("ANTHROPIC_API_KEY not configured")
+    provider = _require_provider(provider, settings)
 
     image_path = Path(image_path)
-    image_data = base64.standard_b64encode(image_path.read_bytes()).decode("utf-8")
-
-    suffix = image_path.suffix.lower()
-    media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
-    media_type = media_types.get(suffix, "image/jpeg")
 
     country_adj = COUNTRY_NAMES.get(country, "Irish") if country else "Irish"
     mpp: float | None = None
@@ -745,39 +747,7 @@ async def analyze_satellite(
             f"- Divide the repeating dimension by {units} if you see the full row"
         )
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
-    message = await client.messages.create(
-        model=settings.claude_model,
-        max_tokens=16000,
-        **_sampling_kwargs(settings),
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_data,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    },
-                ],
-            }
-        ],
-    )
-
-    response_text = _response_text(message)
-
-    # Handle potential markdown code blocks
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        response_text = "\n".join(lines[1:-1])
+    response_text = await _complete([image_path, prompt], provider, settings)
 
     try:
         data = json.loads(response_text)
@@ -862,6 +832,7 @@ async def analyze_satellite(
 async def detect_windows(
     image_path: str | Path,
     facade_hint: tuple[int, int] | None = None,
+    provider: str | None = None,
 ) -> list[dict]:
     """Detect the windows of one building in a Street View image.
 
@@ -875,6 +846,8 @@ async def detect_windows(
         image_path: Path to the street view image file.
         facade_hint: (x1, x2) pixel range of the building to mark, when it is not the
             building at the centre of the image.
+        provider: Vision model provider, "claude" or "mistral" (default: the
+            LLM_PROVIDER setting).
 
     Returns:
         List of {"x1", "y1", "x2", "y2"} dicts (pixel coords) for each window on
@@ -884,7 +857,9 @@ async def detect_windows(
     from PIL import Image  # local import — PIL is guaranteed by streamlit
 
     settings = get_settings()
-    if not settings.anthropic_api_key:
+    try:
+        provider = _require_provider(provider, settings)
+    except ValueError:
         return []
 
     image_path = Path(image_path)
@@ -892,10 +867,6 @@ async def detect_windows(
         return []
 
     image_bytes = image_path.read_bytes()
-    image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
-    suffix = image_path.suffix.lower()
-    media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
-    media_type = media_types.get(suffix, "image/jpeg")
 
     # Get actual image dimensions for the prompt (PIL reads header only, fast)
     try:
@@ -940,32 +911,8 @@ async def detect_windows(
         f"Image coordinates: (0,0) is the top-left pixel, ({img_w},{img_h}) is the bottom-right."
     )
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
     try:
-        message = await client.messages.create(
-            model=settings.claude_model,
-            max_tokens=16000,
-            **_sampling_kwargs(settings),
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_data,
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-        )
-        response_text = _response_text(message)
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            response_text = "\n".join(lines[1:-1])
+        response_text = await _complete([image_path, prompt], provider, settings)
         parsed = json.loads(response_text)
         facade: tuple[int, int] | None = None
         if isinstance(parsed, dict):

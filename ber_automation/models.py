@@ -265,5 +265,8 @@ class PipelineResult(BaseModel):
     house_description: Optional[HouseDescription] = None
     # Windows marked on the similar house (see HouseDescription.similar_house_view); 0 if none
     similar_house_windows: int = 0
+    # Vision model that read the images: provider ("claude" / "mistral") and model ID
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
     ber_result: Optional[BERResult] = None
     errors: list[str] = Field(default_factory=list)

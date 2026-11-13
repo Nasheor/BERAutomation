@@ -12,6 +12,7 @@ Usage:
     python scripts/validate_daft.py              # A + B (uses Google + Anthropic APIs)
     python scripts/validate_daft.py --offline    # A only
     python scripts/validate_daft.py --runs 3     # repeat vision+calc 3x per property
+    python scripts/validate_daft.py --runs 3 --provider both   # Claude and Mistral, same images
 """
 
 from __future__ import annotations
@@ -37,7 +38,16 @@ from ber_automation.models import (  # noqa: E402
     HeatingSystem,
     WindowDoorAreas,
 )
+from ber_automation.config import get_settings  # noqa: E402
 from ber_automation.pipeline import BERPipeline  # noqa: E402
+from ber_automation.vision.providers import (  # noqa: E402
+    KEY_ENV_NAMES,
+    PROVIDER_LABELS,
+    PROVIDERS,
+    api_key,
+    model_name,
+    resolve_provider,
+)
 
 DAFT_DIR = ROOT / "data" / "validation" / "daft"
 OUT_DIR = ROOT / "output" / "daft_validation"
@@ -138,25 +148,39 @@ def input_summary(b: BuildingInput) -> dict:
     }
 
 
-async def run_pipeline_case(case: dict, runs: int) -> list[dict]:
-    """Run the pipeline *runs* times. Run 1 fetches images; later runs re-analyse the
-    same images, so differences between runs are model variance only."""
+async def run_pipeline_case(case: dict, runs: int, provider: str, images_from=None):
+    """Run the pipeline *runs* times with one vision model.
+
+    Run 1 fetches images; later runs re-analyse the same images, so differences between
+    runs are model variance only. With *images_from* (the first result of another model)
+    nothing is fetched: every run re-analyses that result's images, so both models see
+    identical inputs.
+
+    Returns:
+        (summaries, first PipelineResult)
+    """
     out = OUT_DIR / case["eircode"].replace(" ", "_")
-    pipeline = BERPipeline(output_dir=out)
-    first = await pipeline.run(case["eircode"], country=Country.IRELAND)
+    pipeline = BERPipeline(output_dir=out, provider=provider)
+    if images_from is None:
+        first = await pipeline.run(case["eircode"], country=Country.IRELAND)
+    else:
+        first = await pipeline.reanalyse(images_from, country=Country.IRELAND)
     results = [first]
     for _ in range(runs - 1):
         if first.coordinates is None:
             break
         results.append(await pipeline.reanalyse(first, country=Country.IRELAND))
+    tag = "" if provider == "claude" else f"_{provider}"
     for i, r in enumerate(results, start=1):
-        name = "result.json" if i == 1 else f"result_run{i}.json"
+        name = f"result{tag}.json" if i == 1 else f"result{tag}_run{i}.json"
         (out / name).write_text(r.model_dump_json(indent=2), encoding="utf-8")
-    return [_summarise_result(r) for r in results]
+    return [_summarise_result(r) for r in results], first
 
 
 def _summarise_result(result) -> dict:
     info: dict = {
+        "llm_provider": result.llm_provider,
+        "llm_model": result.llm_model,
         "errors": result.errors,
         "geocoded": result.coordinates.formatted_address if result.coordinates else None,
         "footprint_source": result.footprint.source if result.footprint else None,
@@ -190,6 +214,9 @@ def main() -> None:
     ap.add_argument("--offline", action="store_true", help="calculator parity only, no API calls")
     ap.add_argument("--runs", type=int, default=1,
                     help="vision+calc repeats per property on the same images (measures run-to-run variance)")
+    ap.add_argument("--provider", choices=[*PROVIDERS, "both"], default=None,
+                    help="vision model (default: the LLM_PROVIDER setting). 'both' runs each model "
+                         "on the same fetched images and writes one report per model")
     args = ap.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -207,61 +234,83 @@ def main() -> None:
             e, o = c["excel"][m], c["ours"][m]
             print(f"    {m:<20} excel={e:>10.2f}  python={o:>10.2f}  diff={pct(o, e):+7.2f}%")
 
+    providers: list[str] = []
     if not args.offline:
+        settings = get_settings()
+        providers = (list(PROVIDERS) if args.provider == "both"
+                     else [resolve_provider(args.provider, settings)])
+        missing = [KEY_ENV_NAMES[p] for p in providers if not api_key(p, settings)]
+        if missing:
+            sys.exit(f"Not configured: {', '.join(missing)}")
+
+        # One event loop for the whole batch: asyncio.run() per case closes the loop
+        # before the Anthropic/httpx clients are torn down (noisy on Windows).
+        async def run_all() -> dict[str, list]:
+            out: dict[str, list] = {p: [] for p in providers}
+            for c in cases:
+                images_from = None
+                for p in providers:
+                    print(f"  {c['eircode']}  {PROVIDER_LABELS[p]}: running pipeline x{args.runs}...",
+                          flush=True)
+                    try:
+                        summaries, first = await run_pipeline_case(c, args.runs, p, images_from)
+                        if images_from is None and first.coordinates is not None:
+                            images_from = first
+                        out[p].append(summaries)
+                    except Exception as e:  # keep going so one failure doesn't lose the batch
+                        out[p].append([{"errors": [f"{type(e).__name__}: {e}"]}])
+            return out
+
         print("\n" + "=" * 100)
         print("PART B - pipeline (Eircode -> vision -> calc) vs assessor")
         print("=" * 100)
-        # One event loop for the whole batch: asyncio.run() per case closes the loop
-        # before the Anthropic/httpx clients are torn down (noisy on Windows).
-        async def run_all() -> list:
-            out = []
-            for c in cases:
-                print(f"  {c['eircode']}  running pipeline x{args.runs}...", flush=True)
-                try:
-                    out.append(await run_pipeline_case(c, args.runs))
-                except Exception as e:  # keep going so one failure doesn't lose the batch
-                    out.append([{"errors": [f"{type(e).__name__}: {e}"]}])
-            return out
-
+        all_results = asyncio.run(run_all())
         row = "    {:<9} {:<16} {:>5} x {:<5} {:>7} {:>3}  {:<10} {:<12} {:>8} {:>4}"
-        for c, run_results in zip(cases, asyncio.run(run_all())):
-            c["pipeline"] = run_results
-            human, ho = input_summary(c["building"]), c["ours"]
-            print(f"\n{c['file']}  {c['eircode']}  ({run_results[0].get('geocoded')})")
-            print(row.format("", "type", "len", "wid", "area", "st", "epoch", "heating", "kWh/m2a", "BER"))
-            print(row.format("assessor", human["building_type"], human["length"], human["width"],
-                             human["footprint_m2"], human["storeys"], human["epoch"], human["heating"],
-                             ho["primary_kwh_per_m2"], ho["ber_band"]))
-            for i, p in enumerate(run_results, start=1):
-                for err in p["errors"]:
-                    print(f"    run {i} ERROR: {err}")
-                if "inputs" not in p:
-                    continue
-                pi, po = p["inputs"], p["calc"]
-                print(row.format(f"run {i}", pi["building_type"], pi["length"], pi["width"],
-                                 f"{pct(pi['footprint_m2'], human['footprint_m2']):+.0f}%", pi["storeys"],
-                                 pi["epoch"], pi["heating"], po["primary_kwh_per_m2"], po["ber_band"]))
-            done = [p for p in run_results if "inputs" in p]
-            if len(done) > 1:
-                varying = [k for k in human if len({p["inputs"][k] for p in done}) > 1]
-                bands = {p["calc"]["ber_band"] for p in done}
-                print(f"    runs agree: {'yes' if not varying else 'NO - differs in ' + ', '.join(varying)}"
-                      f"{'' if len(bands) == 1 else '  (BER band varies: ' + '/'.join(sorted(bands)) + ')'}")
+        for p in providers:
+            print(f"\n--- {PROVIDER_LABELS[p]} ({model_name(p, settings)}) ---")
+            for c, run_results in zip(cases, all_results[p]):
+                c.setdefault("pipeline", {})[p] = run_results
+                human, ho = input_summary(c["building"]), c["ours"]
+                print(f"\n{c['file']}  {c['eircode']}  ({run_results[0].get('geocoded')})")
+                print(row.format("", "type", "len", "wid", "area", "st", "epoch", "heating", "kWh/m2a", "BER"))
+                print(row.format("assessor", human["building_type"], human["length"], human["width"],
+                                 human["footprint_m2"], human["storeys"], human["epoch"], human["heating"],
+                                 ho["primary_kwh_per_m2"], ho["ber_band"]))
+                for i, r in enumerate(run_results, start=1):
+                    for err in r["errors"]:
+                        print(f"    run {i} ERROR: {err}")
+                    if "inputs" not in r:
+                        continue
+                    pi, po = r["inputs"], r["calc"]
+                    print(row.format(f"run {i}", pi["building_type"], pi["length"], pi["width"],
+                                     f"{pct(pi['footprint_m2'], human['footprint_m2']):+.0f}%", pi["storeys"],
+                                     pi["epoch"], pi["heating"], po["primary_kwh_per_m2"], po["ber_band"]))
+                done = [r for r in run_results if "inputs" in r]
+                if len(done) > 1:
+                    varying = [k for k in human if len({r["inputs"][k] for r in done}) > 1]
+                    bands = {r["calc"]["ber_band"] for r in done}
+                    print(f"    runs agree: {'yes' if not varying else 'NO - differs in ' + ', '.join(varying)}"
+                          f"{'' if len(bands) == 1 else '  (BER band varies: ' + '/'.join(sorted(bands)) + ')'}")
 
-    report = [
-        {
-            "file": c["file"],
-            "eircode": c["eircode"],
-            "assessor_inputs": input_summary(c["building"]),
-            "excel": c["excel"],
-            "python_on_assessor_inputs": c["ours"],
-            "pipeline": c.get("pipeline"),
-        }
-        for c in cases
-    ]
-    path = OUT_DIR / ("report_offline.json" if args.offline else "report.json")
-    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(f"\nReport written to {path}")
+    # One report per model: report.json for Claude (as before), report_<provider>.json
+    # for the others; report_offline.json when no model was run.
+    for p in providers or [None]:
+        report = [
+            {
+                "file": c["file"],
+                "eircode": c["eircode"],
+                "assessor_inputs": input_summary(c["building"]),
+                "excel": c["excel"],
+                "python_on_assessor_inputs": c["ours"],
+                "pipeline": c["pipeline"][p] if p else None,
+            }
+            for c in cases
+        ]
+        name = ("report_offline.json" if p is None
+                else "report.json" if p == "claude" else f"report_{p}.json")
+        path = OUT_DIR / name
+        path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(f"\nReport written to {path}")
 
 
 if __name__ == "__main__":

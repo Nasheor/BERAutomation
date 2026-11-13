@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 from ber_automation.ber_engine.calculator import HWBCalculator
+from ber_automation.config import get_settings
 from ber_automation.geospatial.census import choose_epoch, choose_heating, lookup_census_area
 from ber_automation.geospatial.geocoder import geocode_address
 from ber_automation.geospatial.imagery import (
@@ -35,6 +36,7 @@ from ber_automation.vision.claude_analyzer import (
     describe_house,
     detect_windows,
 )
+from ber_automation.vision.providers import PROVIDER_LABELS, model_name, resolve_provider
 from ber_automation.vision.footprint import (
     SIMILAR_WINDOW_COLOR,
     draw_footprint_overlay,
@@ -43,10 +45,22 @@ from ber_automation.vision.footprint import (
 )
 
 
+
+def _error_text(error: BaseException) -> str:
+    """An error's message, or its type when it has none (a timeout's message is empty)."""
+    return str(error) or type(error).__name__
+
 class BERPipeline:
     """End-to-end BER estimation pipeline."""
 
-    def __init__(self, output_dir: str | Path | None = None):
+    def __init__(self, output_dir: str | Path | None = None, provider: str | None = None):
+        """
+        Args:
+            output_dir: Folder for fetched images and overlays (default: a temp folder).
+            provider: Vision model provider, "claude" or "mistral" (default: the
+                LLM_PROVIDER setting).
+        """
+        self.provider = provider
         self.output_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp())
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.calculator = HWBCalculator()
@@ -79,7 +93,7 @@ class BERPipeline:
             coords = await geocode_address(address, country)
             result.coordinates = coords
         except Exception as e:
-            result.errors.append(f"Geocoding failed: {e}")
+            result.errors.append(f"Geocoding failed: {_error_text(e)}")
             return result
 
         # Phase 2: Fetch images (parallel) — satellite + 4 Street View angles
@@ -97,7 +111,7 @@ class BERPipeline:
             if isinstance(sat_result, Path):
                 result.satellite_image_path = str(sat_result)
             elif isinstance(sat_result, Exception):
-                result.errors.append(f"Satellite image failed: {sat_result}")
+                result.errors.append(f"Satellite image failed: {_error_text(sat_result)}")
 
             if isinstance(sv_result, list):
                 sv_paths = sv_result
@@ -107,9 +121,9 @@ class BERPipeline:
                 else:
                     result.errors.append("No Street View available at this location")
             elif isinstance(sv_result, Exception):
-                result.errors.append(f"Street View failed: {sv_result}")
+                result.errors.append(f"Street View failed: {_error_text(sv_result)}")
         except Exception as e:
-            result.errors.append(f"Image fetching failed: {e}")
+            result.errors.append(f"Image fetching failed: {_error_text(e)}")
 
         result = await self._run_vision_and_calc(
             result, coords, sv_paths, country, retrofit, overrides, satellite_zoom=20,
@@ -131,6 +145,12 @@ class BERPipeline:
         Separated from run() so reanalyse() can call it directly without
         re-fetching images from Google.
         """
+        settings = get_settings()
+        provider = resolve_provider(self.provider, settings)
+        provider_label = PROVIDER_LABELS[provider]
+        result.llm_provider = provider
+        result.llm_model = model_name(provider, settings)
+
         # Phase 3: Street view analysis (before satellite to inform footprint), with
         # the census Small Area looked up in parallel (Ireland; None elsewhere/on error)
         async def _streetview():
@@ -138,14 +158,14 @@ class BERPipeline:
                 return None
             return await analyze_streetview(
                 sv_paths, country=country,
-                location=coords.formatted_address or None,
+                location=coords.formatted_address or None, provider=provider,
             )
 
         analysis, census_area = await asyncio.gather(
             _streetview(), lookup_census_area(coords, country), return_exceptions=True,
         )
         if isinstance(analysis, Exception):
-            result.errors.append(f"Claude analysis failed: {analysis}")
+            result.errors.append(f"AI analysis failed ({provider_label}): {_error_text(analysis)}")
         else:
             result.street_analysis = analysis
         if not isinstance(census_area, Exception):
@@ -157,7 +177,7 @@ class BERPipeline:
         description_task = (
             asyncio.ensure_future(describe_house(
                 sv_paths, analysis=result.street_analysis, country=country,
-                location=coords.formatted_address or None,
+                location=coords.formatted_address or None, provider=provider,
             ))
             if sv_paths else None
         )
@@ -185,10 +205,11 @@ class BERPipeline:
                     zoom=satellite_zoom,
                     country=country,
                     census=result.census,
+                    provider=provider,
                     **sat_kwargs,
                 )
             except Exception as e:
-                result.errors.append(f"Claude satellite analysis failed: {e}")
+                result.errors.append(f"AI satellite analysis failed ({provider_label}): {_error_text(e)}")
 
             # Secondary: OpenCV for cross-validation (always uses zoom=20 as approx scale).
             # Pass Claude's dimension estimates so OpenCV selects the contour that best
@@ -202,7 +223,7 @@ class BERPipeline:
                     expected_width_m=claude_fp.width_m if claude_fp else None,
                 )
             except Exception as e:
-                result.errors.append(f"OpenCV footprint extraction failed: {e}")
+                result.errors.append(f"OpenCV footprint extraction failed: {_error_text(e)}")
 
             # Reconcile results
             footprint = self._reconcile_footprints(claude_fp, opencv_fp)
@@ -266,13 +287,13 @@ class BERPipeline:
                     zoom=satellite_zoom,
                 )
             except Exception as e:
-                result.errors.append(f"Satellite annotation failed: {e}")
+                result.errors.append(f"Satellite annotation failed: {_error_text(e)}")
 
         if description_task is not None:
             try:
                 result.house_description = await description_task
             except Exception as e:
-                result.errors.append(f"House description failed: {e}")
+                result.errors.append(f"House description failed: {_error_text(e)}")
 
         if sv_paths:
             for sv_path in sv_paths:
@@ -287,9 +308,10 @@ class BERPipeline:
             # was based on.
             similar = self._similar_house_view(result.house_description, sv_paths)
             try:
-                jobs = [detect_windows(p) for p in front_views]
+                jobs = [detect_windows(p, provider=provider) for p in front_views]
                 if similar:
-                    jobs.append(detect_windows(similar[0], facade_hint=similar[1]))
+                    jobs.append(detect_windows(
+                        similar[0], facade_hint=similar[1], provider=provider))
                 window_lists = await asyncio.gather(*jobs, return_exceptions=True)
                 for sv_path, wins in zip(front_views, window_lists):
                     if isinstance(wins, Exception) or not wins:
@@ -312,7 +334,7 @@ class BERPipeline:
                         )
                         result.similar_house_windows = len(wins)
             except Exception as e:
-                result.errors.append(f"Window annotation failed: {e}")
+                result.errors.append(f"Window annotation failed: {_error_text(e)}")
 
         # Phase 5: Build inputs and calculate BER
         try:
@@ -320,7 +342,7 @@ class BERPipeline:
             ber_result = self.calculator.calculate_ber(building_input, retrofit)
             result.ber_result = ber_result
         except Exception as e:
-            result.errors.append(f"BER calculation failed: {e}")
+            result.errors.append(f"BER calculation failed: {_error_text(e)}")
 
         return result
 

@@ -19,6 +19,7 @@ from ber_automation.models import (
     RetrofitInput,
 )
 from ber_automation.pipeline import BERPipeline
+from ber_automation.vision.providers import PROVIDERS
 
 
 def main():
@@ -37,6 +38,12 @@ def main():
         help="Country for geocoding filter and climate data (default: ireland)",
     )
     pipe_p.add_argument("--output-dir", default="output", help="Output directory")
+    pipe_p.add_argument(
+        "--provider",
+        choices=list(PROVIDERS),
+        default=None,
+        help="Vision model that reads the images (default: the LLM_PROVIDER setting)",
+    )
 
     # --- manual command ---
     man_p = sub.add_parser("manual", help="Calculate BER from manual inputs")
@@ -83,7 +90,7 @@ def main():
 
 
 def _run_pipeline(args):
-    pipeline = BERPipeline(output_dir=args.output_dir)
+    pipeline = BERPipeline(output_dir=args.output_dir, provider=args.provider)
     result = asyncio.run(pipeline.run(args.address, country=Country(args.country)))
 
     if result.errors:

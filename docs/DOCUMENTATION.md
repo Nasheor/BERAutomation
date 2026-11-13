@@ -450,7 +450,7 @@ Uses `pydantic-settings` to load configuration from environment variables or a `
 | `ANTHROPIC_API_KEY` | (required) | Anthropic Claude API key |
 | `satellite_zoom` | 20 | Satellite image zoom level |
 | `streetview_fov` | 90 | Street View field of view |
-| `claude_model` | claude-sonnet-4-5 | Claude model for vision analysis |
+| `claude_model` | claude-sonnet-5-5 | Claude model for vision analysis |
 
 ### 3.3 `ber_automation/ber_engine/constants.py`
 

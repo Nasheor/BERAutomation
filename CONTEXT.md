@@ -370,6 +370,81 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 - Even without temperature 0, repeat runs on the same images mostly agree; T23 RK10 still
   flips between detached and semi-d.
 
+### Vision Model Providers: Claude and Mistral (`ber_automation/vision/providers.py`, Nov 2026)
+- **Why:** the paper compares two commercial models on the same task (accuracy, agreement
+  between repeat runs, cost); Mistral is also EU-hosted.
+- All four model calls (`analyze_streetview`, `describe_house`, `analyze_satellite`,
+  `detect_windows`) take `provider: str | None` and go through one helper,
+  `claude_analyzer._complete(parts, provider, settings)`. `parts` is the ordered list of text
+  strings and image paths. **Both models get the same prompts, labels and images in the same
+  order**; all parsing after the reply is shared.
+  - Claude: the anthropic SDK, same request as before (existing tests unchanged).
+  - Mistral: `providers.mistral_complete()` posts to `/v1/chat/completions` with httpx (no
+    new dependency), **streamed**, `max_tokens` 16000 (as for Claude), `reasoning_effort`
+    `low`, no JSON mode. Images are `{"type": "image_url", "image_url": "data:image/jpeg;base64,..."}`.
+    The JSON object is cut out of the reply (`json_object_text()`), thinking chunks are
+    skipped, one retry on 429 / 5xx, errors carry Mistral's own message.
+- **Why streamed, `low` and no JSON mode (Nov 2026, `T12 K7AC`):** at Mistral's default
+  reasoning level the Street View, satellite and description requests sent nothing back
+  for over 7 minutes (also streamed: no first byte). With JSON mode on, the satellite
+  request hung even at `low`. Not streamed, `low` was unreliable (the description
+  answered in 6 s, the other two hung). Streamed at `low` all three answer in 10 to 20 s
+  and a full pipeline run takes about 1 minute. Mistral Large 4 cannot switch reasoning
+  off; `MISTRAL_REASONING_EFFORT` can be set to `medium` or `high` to test again later.
+  For the paper: Claude runs at its default (adaptive) thinking, Mistral at `low`.
+- Choosing: `resolve_provider(provider, settings)` → the argument, else `LLM_PROVIDER`
+  (default `claude`). `BERPipeline(output_dir, provider=None)` passes it to every call and
+  records `PipelineResult.llm_provider` / `llm_model`. Errors name the model
+  ("AI analysis failed (Mistral): ..."). A missing key gives "MISTRAL_API_KEY not configured".
+- Settings: `MISTRAL_API_KEY`, `MISTRAL_MODEL` (default `mistral-large-4-0`, a fixed ID
+  rather than `mistral-large-latest`, so every run of the study uses the same model; it
+  lists `vision` among its capabilities in `GET /v1/models`), `MISTRAL_TEMPERATURE`
+  (default unset), `LLM_PROVIDER`.
+- **Sampling:** both models run with their default sampling. Claude's current models
+  refuse a temperature, so setting one only for Mistral would make the agreement between
+  repeat runs incomparable. Mistral refuses temperature 0 unless `top_p` is 1 ("top_p must
+  be 1 when using greedy sampling", 400), so a configured temperature is sent with
+  `top_p=1`. Errors now carry Mistral's own message.
+- Mistral Large 4 is a reasoning model: its reply is a list of chunks, a `thinking` chunk
+  first, then the text; `_reply_text()` keeps only the text chunks.
+- Where it can be chosen: `python main.py pipeline "T12 K7AC" --provider mistral`;
+  `python scripts/validate_daft.py --runs 3 --provider both` (the second model re-analyses
+  the images fetched for the first, and each model gets its own report: `report.json` for
+  Claude, `report_mistral.json`); the app shows an "AI model" choice in Full Pipeline mode
+  **only when both keys are configured** (the live app has no Mistral key, so it is
+  unchanged), and "Analysed with Claude (model)" under *AI Building Analysis*.
+- `FootprintResult.source` stays `"claude_vision"` for either model (pipeline logic and tests
+  depend on the value; the app labels it "AI Vision").
+- The first key in `.env` was refused (401 "Invalid API Key"); a new key works (Nov 2026).
+  First comparison on the 5 homes: *Part B — Mistral Large 4 against Claude*. Mistral
+  places roof corners much less consistently than Claude. The prompts stay identical for
+  both models; a weak result is a finding, not something to tune away.
+- After the refactor a live Claude run of `T12 K7AC` gave A3, 67 kWh/m²/yr, as before.
+
+## Official-BER Sample for the Paper (`data/validation/official/`, Nov 2026)
+
+- `sample.csv`: one row per home, filled in by hand from property listings and checked
+  against SEAI's register (no scraping). It is empty so far (header only). Columns and
+  the collection steps are in the `README.md` next to it. Required: `id`, `eircode`,
+  `county`, `settlement` (urban/rural), `listing_source`, `date_recorded`, `ber_number`
+  (9 digits), `ber_band`, `ber_kwh_m2_yr`. Optional, from the certificate or register:
+  `listing_url`, `dwelling_type` (detached / semi_detached / terraced; houses only),
+  `year_built`, `floor_area_m2`, `storeys`, `heating`, `register_checked`, `notes`.
+- `ber_automation/evaluation/official_sample.py`: `load_official_sample(path)` →
+  `(homes, problems)`. It normalises Eircodes, reports unusable values, duplicates and a
+  band that does not match the kWh value (the band follows from the value on the BER
+  scale, so a mismatch is a typing mistake in one of the two). A row with an unusable
+  required value is left out; a bad optional value is reported and dropped.
+  `OfficialHome.epoch` maps `year_built` to the calculator's era; `summarise()` counts
+  homes per county, settlement, dwelling type, era and band.
+- `python scripts/check_official_sample.py` prints the problems and the counts against the
+  plan (about 250 homes, at least 4 counties). No API calls.
+- **Not confirmed:** which of the optional values SEAI's register shows for a BER number.
+  The first few lookups will tell; the comparison of AI-read inputs with certificate
+  inputs depends on them.
+- Not built yet: `scripts/validate_official.py` (both models, the baselines, the
+  three-level comparison) and the census-only / images-only switches.
+
 ## Daft Validation (`scripts/validate_daft.py`)
 
 `data/validation/daft/1–5.xlsx` are copies of the Kaiser Excel tool filled in by a human assessor
@@ -540,8 +615,41 @@ only, so this run checks that the rating inputs did not move.
   (B2) only because the wrong type offset the wrong storey count. That version was dropped.
 - The descriptions run to 7–9 sentences although the prompt asks for 3 to 5.
 
+### Part B — Mistral Large 4 against Claude (2026-11-13, 3 runs each)
+
+Reports: `report_mistral.json` (Mistral, `mistral-large-4-0`, reasoning `low`, streamed)
+against `report_claude_description_step.json` (Claude Sonnet 5.5, same code, run
+2026-11-12). Each model fetched its own images; the Google and Mapbox images for a
+coordinate are the same, so the inputs match.
+
+| Eircode | Claude: type, st, footprint, BER | Mistral: type, st, footprint (3 runs), BER (3 runs) | Assessor BER |
+|---|---|---|---|
+| T23 HYW6 | semi-d, 2, −2% ×3, B2 ×3 | semi-d, 2, −16% / +48% / +17%, B2 / B1 / B1 | B2 |
+| T23 RK10 | semi-d, **2**, +26…+29%, B1 ×3 | semi-d / terraced / terraced, **1** ×3, −29% / −29% / +8%, B2 / B1 / B1 | B2 |
+| T12 K7AC | semi-d, 2, +4…+5%, A3 ×3 | semi-d, 2, −3% / +117% / +70%, A3 ×3 | A3 |
+| T23 AX03 | terraced, 2, +18% ×3 (OpenCV), A3 ×3 | terraced, 2, +18% / +162% / +18%, A3 ×3 | B1 |
+| T12 TP3C | semi-d, 2, +27% ×3 (OpenCV), B1 ×3 | semi-d, 2, +39% / −28% / −3%, B1 ×3 | B1 |
+
+- **BER band:** exact Claude 9/15 runs (3/5 homes in every run), Mistral 8/15; within
+  one band both 15/15.
+- **Footprint area, mean |error| over all runs:** Claude 16%, Mistral 40% (worst +162%,
+  +117%). Claude's runs agree within 3% on every home; Mistral's differ by up to 130
+  points on the same images.
+- **Storeys:** Mistral read RK10 (a dormer bungalow) as 1 storey in all 3 runs, which
+  matches the assessor; Claude reads 2 every time (the open dormer issue). Mistral called
+  RK10 terraced in 2 runs (wrong).
+- **Era and heating:** the same as Claude except one RK10 run (1990–2000); heating comes
+  from the census for both.
+- **Confidence:** Mistral reports 0.65–0.97 for its satellite reading and 0.8–0.9 for
+  Street View, Claude 0.4–0.7 and 0.4–0.6, so Mistral's confidence does not warn about its
+  large footprint errors (research question 4: do the models know when they are wrong).
+- One Mistral satellite request returned 503 "Service unavailable" after the retry
+  (AX03 run 1); the pipeline fell back to OpenCV.
+- Caveats: 5 homes, one city; Mistral at `low` reasoning because its default level hung
+  (see *Vision Model Providers*); compared with an assessor, not official BERs.
+
 ### Test Coverage
-- 135 tests total (`tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 167 tests total (`tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0;
@@ -607,9 +715,15 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
 
 - **Mistral as a second, user-selectable vision model, and the paper** (AI estimate versus
   official BER): full plan in `docs/plans/mistral_provider_and_paper_plan.md` (saved
-  2026-11-12, not implemented). It covers the provider switch (`providers.py`, `_complete()`
+  2026-11-12). **Part A, the provider switch, is implemented** (see *Vision Model
+  Providers*) but not yet run against Mistral. It covers the provider switch (`providers.py`, `_complete()`
   in `claude_analyzer.py`, `--provider` flags, app selector), the paper's research questions
   and study design (official BERs from listings + SEAI register, about 250 homes, census-only
   baseline, HWB-versus-DEAP error separated from perception error), and target venues with
   dates (SBE27 Delft abstract due 18 Dec 2026).
-- Waiting on supervisor feedback on the deployed tool before starting.
+- The official-BER sample format and its checker exist (see *Official-BER Sample for the
+  Paper*); the sample itself is still to be collected.
+- Next for the paper: a valid Mistral key and the two-model comparison on the 5 Cork
+  homes; the first 10 to 20 sample rows, to learn what the register provides;
+  `scripts/validate_official.py` with the baselines and the three-level comparison;
+  census-only and images-only switches.
