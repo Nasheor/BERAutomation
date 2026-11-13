@@ -45,14 +45,21 @@ def resolve_provider(provider: str | None, settings) -> str:
 
 
 def api_key(provider: str, settings) -> str:
-    """The API key configured for *provider* ("" when missing)."""
-    key = settings.anthropic_api_key if provider == "claude" else settings.mistral_api_key
+    """The API key configured for *provider* ("" when missing).
+
+    getattr: Streamlit Cloud applies a push without restarting, so the app can hold a
+    Settings object loaded before the Mistral fields existed (seen Nov 2026).
+    """
+    field = "anthropic_api_key" if provider == "claude" else "mistral_api_key"
+    key = getattr(settings, field, "")
     return key if isinstance(key, str) else ""
 
 
 def model_name(provider: str, settings) -> str:
-    """The model ID configured for *provider*."""
-    return settings.claude_model if provider == "claude" else settings.mistral_model
+    """The model ID configured for *provider* ("" when missing)."""
+    field = "claude_model" if provider == "claude" else "mistral_model"
+    name = getattr(settings, field, "")
+    return name if isinstance(name, str) else ""
 
 
 def available_providers(settings) -> list[str]:

@@ -296,3 +296,16 @@ async def test_pipeline_error_names_the_provider(tmp_path):
             country=None, retrofit=None, overrides=None,
         )
     assert "AI analysis failed (Mistral): MISTRAL_API_KEY not configured" in result.errors
+
+
+def test_settings_without_mistral_fields_do_not_crash():
+    """Settings loaded before the Mistral fields existed (Streamlit Cloud hot reload)."""
+    from types import SimpleNamespace
+
+    from ber_automation.vision.providers import api_key, available_providers, model_name
+
+    old = SimpleNamespace(anthropic_api_key="key", claude_model="claude-sonnet-5-5")
+    assert available_providers(old) == ["claude"]
+    assert api_key("mistral", old) == ""
+    assert model_name("mistral", old) == ""
+    assert model_name("claude", old) == "claude-sonnet-5-5"
