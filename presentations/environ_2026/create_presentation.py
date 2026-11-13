@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Generate docs/environ_2026_presentation.pptx for Environ 2026 conference."""
+"""Generate environ_2026_presentation.pptx (next to this script) for Environ 2026."""
+
+from pathlib import Path
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -7,9 +9,9 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE = r"C:\Users\nagar\PyCharmProjects\BERAutomation"
-LOGO = BASE + r"\images\circus_logo-presentation.png"
-OUT  = BASE + r"\docs\environ_2026_presentation.pptx"
+HERE = Path(__file__).resolve().parent
+LOGO = str(HERE.parents[1] / "images" / "circus_logo-presentation.png")
+OUT  = str(HERE / "environ_2026_presentation.pptx")
 
 # ── Slide dimensions (16:9 widescreen) ───────────────────────────────────────
 SW = Inches(13.333)

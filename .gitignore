@@ -26,3 +26,5 @@ build/
 Thumbs.db
 # Streamlit secrets (API keys for local runs / pasting into Streamlit Cloud)
 .streamlit/secrets.toml
+# Claude Code local settings (machine-specific permissions)
+.claude/settings.local.json

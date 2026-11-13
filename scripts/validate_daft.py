@@ -1,6 +1,6 @@
 """Validate the calculator and the vision pipeline against the Daft.ie workbooks.
 
-Each tests/Daft/N.xlsx is a copy of the Kaiser Excel tool filled in by a human
+Each data/validation/daft/N.xlsx is a copy of the Kaiser Excel tool filled in by a human
 assessor for one Irish property (Eircode in Input!A2).
 
 Part A (offline): feed the assessor's inputs to HWBCalculator and compare with the
@@ -39,7 +39,7 @@ from ber_automation.models import (  # noqa: E402
 )
 from ber_automation.pipeline import BERPipeline  # noqa: E402
 
-DAFT_DIR = ROOT / "tests" / "Daft"
+DAFT_DIR = ROOT / "data" / "validation" / "daft"
 OUT_DIR = ROOT / "output" / "daft_validation"
 
 BUILDING_TYPES = {

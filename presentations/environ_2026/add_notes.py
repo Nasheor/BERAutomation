@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Add speaker notes to docs/environ_2026_presentation.pptx."""
+"""Add speaker notes to environ_2026_presentation.pptx (next to this script)."""
+
+from pathlib import Path
 
 from pptx import Presentation
 from pptx.util import Pt
 
-PPTX = r"C:\Users\nagar\PyCharmProjects\BERAutomation\docs\environ_2026_presentation.pptx"
+PPTX = str(Path(__file__).resolve().parent / "environ_2026_presentation.pptx")
 
 # ── Speaker notes, one entry per slide ────────────────────────────────────────
 NOTES = [

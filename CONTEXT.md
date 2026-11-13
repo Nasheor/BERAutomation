@@ -214,7 +214,7 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   that `pano_id`. Views that are near-duplicates of an earlier one (64×64 greyscale mean diff
   < 4) are deleted, so fewer than 4 can come back. Old `streetview_*` files and overlays are
   cleared before each fetch, and each view's `_annotated` overlay is removed before window
-  detection. Cause of the app screenshot `images/output.png`, where Front = Right and Rear =
+  detection. Cause of the app screenshot `docs/images/streetview_duplicate_views.png`, where Front = Right and Rear =
   Left: user-contributed partial panoramas return the nearest edge for out-of-range headings.
   The app captions views by file index (`streetview_2` = Rear) because positions can shift.
 - **Backward-compatible**: accepts a single path (str/Path) or a list of paths
@@ -372,7 +372,7 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 
 ## Daft Validation (`scripts/validate_daft.py`)
 
-`tests/Daft/1–5.xlsx` are copies of the Kaiser Excel tool filled in by a human assessor
+`data/validation/daft/1–5.xlsx` are copies of the Kaiser Excel tool filled in by a human assessor
 for five Cork Eircodes. They hold the assessor's inputs and the Excel outputs — **not**
 listed BER certificates. "Assessor BER" below = `HWBCalculator` on the assessor's inputs.
 
@@ -554,6 +554,24 @@ only, so this run checks that the rating inputs did not move.
   - `_reconcile_footprints()` — agreement boost, disagreement, Claude fallback, both fail, low confidence
   - `_build_input()` — high/low confidence, unreasonable area, clamping, no footprint, overrides,
     high-confidence street analysis used, low-confidence street analysis ignored
+
+## Repository Layout (reorganised 2026-11-12)
+
+The layout table is in `README.md`. What moved:
+
+- Assessor spreadsheets: `tests/Daft/` → `data/validation/daft/` (evaluation data, not tests;
+  the official-BER sample for the paper goes next to it).
+- Source material (Excel tool with guide and sources, HWB guide, DEAP manual): `docs/` →
+  `docs/reference/`.
+- Talks and demos: root, `docs/` and `paper/` → `presentations/environ_2026/` and
+  `presentations/circus_demo_2026_03/`. `paper/` now holds only `main.tex` and
+  `references.bib`.
+- Removed: `excel_extraction.txt` (13 MB cell dump of the Excel tool), `data/constants.json`
+  and `data/ber_rating_scale.json` (unused since the MVP; the values live in
+  `ber_engine/constants.py` and `rating.py`), `GEMINI.md` (stale agent notes),
+  `verify_notes.py`, `Redon/`. `.claude/settings.local.json` is no longer tracked.
+- Unchanged, because Streamlit Cloud depends on them: `app/streamlit_app.py`,
+  `requirements.txt`, `packages.txt`, `.streamlit/config.toml`.
 
 ## Deployment (Streamlit Community Cloud, invite-only)
 
