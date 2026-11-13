@@ -192,6 +192,55 @@ def _parse_row(row: dict[str, str], line: int) -> tuple[OfficialHome | None, lis
     ), problems
 
 
+def check_row(row: dict[str, str]) -> tuple[OfficialHome | None, list[str]]:
+    """Check one row (column → text) the way load_official_sample does.
+
+    Returns:
+        (home, problems): home is None when a required value is unusable.
+    """
+    return _parse_row(row, 0)
+
+
+# Dwelling types as the SEAI register writes them → the sample's values. An end-of-terrace
+# house has one shared wall, so it counts as semi_detached (see DWELLING_TYPES).
+_REGISTER_DWELLINGS: dict[str, str] = {
+    "detached house": "detached",
+    "semi-detached house": "semi_detached",
+    "end of terrace house": "semi_detached",
+    "mid-terrace house": "terraced",
+}
+
+
+def dwelling_from_register(text: str) -> str | None:
+    """"Semi-detached house" → "semi_detached"; None for flats and unknown text."""
+    key = re.sub(r"\s+", " ", text.strip().lower()).replace("end-of-terrace", "end of terrace")
+    if key in _REGISTER_DWELLINGS:
+        return _REGISTER_DWELLINGS[key]
+    simple = key.replace("-", "_").replace(" ", "_")
+    return simple if simple in DWELLING_TYPES else None
+
+
+def parse_rating(text: str) -> tuple[str, float] | None:
+    """The register's "Building Energy Rating" text → (band, kWh/m²/yr).
+
+    "C2 177.03 (kWh/m2/yr)" → ("C2", 177.03). None when band or value is missing.
+    """
+    match = re.match(r"^\s*([A-Ga-g][1-3]?)\s+([\d,]+(?:\.\d+)?)", text)
+    if not match:
+        return None
+    band = match.group(1).upper()
+    value = _number(match.group(2), 0.01, 2000)
+    if band not in BANDS or value is None:
+        return None
+    return band, value
+
+
+def first_number(text: str) -> str:
+    """The first number in *text* ("137.17 (m2)" → "137.17"), or "" when there is none."""
+    match = re.search(r"\d[\d,]*(?:\.\d+)?", text)
+    return match.group(0).replace(",", "") if match else ""
+
+
 def load_official_sample(path: str | Path) -> tuple[list[OfficialHome], list[str]]:
     """Read the sample CSV.
 

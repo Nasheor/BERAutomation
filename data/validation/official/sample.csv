@@ -1,1 +1,2 @@
 ﻿id,eircode,county,settlement,listing_source,date_recorded,ber_number,ber_band,ber_kwh_m2_yr,listing_url,dwelling_type,year_built,floor_area_m2,storeys,heating,register_checked,notes
+1,R35 HH93,Offaly,urban,daft.ie,2026-11-13,113779219,C2,177.03,https://www.daft.ie/for-sale/13-harbour-drive-tullamore-co-offaly/6707192,semi_detached,2001,137.17,,,yes,"Register: issued 2021-04-21, existing dwelling, DEAP 4.0.0, CO2 45.95 kg/m2/yr"

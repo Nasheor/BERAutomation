@@ -437,11 +437,25 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   required value is left out; a bad optional value is reported and dropped.
   `OfficialHome.epoch` maps `year_built` to the calculator's era; `summarise()` counts
   homes per county, settlement, dwelling type, era and band.
+- `python scripts/add_official_home.py`: step-by-step checklist for manual lookups (listing
+  values, then the register values). Each answer is checked as typed (Eircode, 9-digit BER
+  number, duplicates, band vs kWh, houses only); a row is saved only when `check_row`
+  passes, with the next id, today's date and `register_checked=yes`. Register text can be
+  pasted as shown ("C2 177.03 (kWh/m2/yr)", "Semi-detached house", "137.17 (m2)"):
+  `parse_rating`, `dwelling_from_register`, `first_number`. No web requests.
 - `python scripts/check_official_sample.py` prints the problems and the counts against the
   plan (about 250 homes, at least 4 counties). No API calls.
-- **Not confirmed:** which of the optional values SEAI's register shows for a BER number.
-  The first few lookups will tell; the comparison of AI-read inputs with certificate
-  inputs depends on them.
+- **Register lookups cannot be scripted (checked 2026-11-13):** the search form at
+  `ndber.seai.ie/pass/ber/search.aspx` takes a BER number or MPRN only (no Eircode) and
+  runs Google reCAPTCHA v3, i.e. bot detection. Lookups are done by hand in a browser
+  unless SEAI provides another route. Data requests go to info@ber.seai.ie (who, what,
+  why); the full data file is limited by S.I. 243/2012 to the assessor and the owner.
+- **What the register shows (first lookup, BER 113779219, 2026-11-13):** address
+  (no Eircode), band and kWh/m²/yr, CO2 indicator, date of issue and expiry, type of
+  rating (existing/new/provisional), DEAP version, dwelling type, year of construction,
+  floor area, plus certificate and advisory-report PDFs. **Not shown:** storeys,
+  heating system, U-values; those are in the advisory report or the full data file.
+  The listing (daft.ie) gave band and BER number but no kWh value.
 - Not built yet: `scripts/validate_official.py` (both models, the baselines, the
   three-level comparison) and the census-only / images-only switches.
 
@@ -649,7 +663,7 @@ coordinate are the same, so the inputs match.
   (see *Vision Model Providers*); compared with an assessor, not official BERs.
 
 ### Test Coverage
-- 167 tests total (`tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 189 tests total (`tests/test_add_official_home.py`: register text parsed, row saved and passes the checker, re-ask on bad answers, duplicates refused, band/kWh mismatch not saved, ids continue; `tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0;

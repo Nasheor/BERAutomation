@@ -22,7 +22,7 @@ python -m pytest -q
 | `app/streamlit_app.py` | Web app (also the file Streamlit Cloud deploys) |
 | `main.py` | Command-line entry point |
 | `ber_automation/` | The package: `geospatial/` (geocoding, images, census), `vision/` (AI and OpenCV image reading), `ber_engine/` (HWB calculator, rating bands), `evaluation/` (official-BER sample), `pipeline.py`, `models.py`, `config.py`, `data/` (census tables shipped with the package) |
-| `scripts/` | `validate_daft.py` (pipeline versus assessor), `check_official_sample.py`, `build_census_data.py` |
+| `scripts/` | `validate_daft.py` (pipeline versus assessor), `add_official_home.py` (checklist for adding sample homes), `check_official_sample.py`, `build_census_data.py` |
 | `tests/` | Unit tests |
 | `data/validation/` | Evaluation data. `daft/1–5.xlsx`: the Excel tool filled in by an assessor for five Cork homes. `official/sample.csv`: homes with official BERs for the paper |
 | `docs/` | `DOCUMENTATION.md`, `country_data.md`, `test_addresses.md`, `diagrams/`, `plans/`, `images/` |

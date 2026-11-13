@@ -1,7 +1,14 @@
 # Official-BER sample
 
 `sample.csv` holds the homes used to compare the pipeline with official Building Energy
-Ratings: one row per home. It is filled in by hand. Check it at any time with:
+Ratings: one row per home. It is filled in by hand. The easiest way is the checklist,
+which asks for each value, checks it as you type and saves only complete, valid rows:
+
+```
+python scripts/add_official_home.py
+```
+
+Check the whole sample at any time with:
 
 ```
 python scripts/check_official_sample.py
@@ -13,18 +20,21 @@ and shows how the sample is spread over counties, dwelling types, eras and bands
 ## Which homes
 
 - Houses only: detached, semi-detached or terraced. The pipeline does not handle apartments.
-- The listing must show the Eircode, the BER band, the BER number and the energy value
-  in kWh/m²/yr.
+- The listing must show the Eircode and the BER number. The energy value (kWh/m²/yr)
+  comes from the register; listings often leave it out.
 - Plan: about 250 homes in at least 4 counties, mixed by urban/rural, dwelling type and
   era, and not only the common bands (include A-rated and E to G homes).
 
 ## How to collect
 
-1. Record the values from the listing by hand. Do not scrape; check the site's terms.
-2. Look the BER number up on SEAI's public register (https://ndber.seai.ie) and confirm
-   the band and kWh value. Set `register_checked` to `yes`.
-3. Copy any further values the register shows (dwelling type, year of construction, floor
-   area, heating) into the optional columns. Leave a cell empty when the value is not shown.
+1. Open a listing and note the Eircode, county, urban/rural and BER number; storeys and
+   heating too if the listing says. Do not scrape; check the site's terms.
+2. Look the BER number up on SEAI's register (https://ndber.seai.ie/pass/ber/search.aspx),
+   by hand: the search is protected against automated use. Copy the Building Energy
+   Rating (band and kWh), Dwelling Type, Year Of Construction, Floor Area and Date Of Issue.
+   The register does not show storeys or heating.
+3. `add_official_home.py` asks for these in this order and sets `register_checked` to `yes`.
+   Typing "skip" drops the current home, "quit" stops; saved homes are kept.
 
 ## Columns
 
