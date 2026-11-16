@@ -424,7 +424,8 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 ## Official-BER Sample for the Paper (`data/validation/official/`, Nov 2026)
 
 - `sample.csv`: one row per home, filled in by hand from property listings and checked
-  against SEAI's register (no scraping). It is empty so far (header only). Columns and
+  against SEAI's register (no scraping). 13 homes on 2026-11-13 (Cork 6, Dublin 4, Kildare,
+  Meath, Offaly; bands A2 to D2, none E to G yet). Columns and
   the collection steps are in the `README.md` next to it. Required: `id`, `eircode`,
   `county`, `settlement` (urban/rural), `listing_source`, `date_recorded`, `ber_number`
   (9 digits), `ber_band`, `ber_kwh_m2_yr`. Optional, from the certificate or register:
@@ -456,8 +457,27 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   floor area, plus certificate and advisory-report PDFs. **Not shown:** storeys,
   heating system, U-values; those are in the advisory report or the full data file.
   The listing (daft.ie) gave band and BER number but no kWh value.
-- Not built yet: `scripts/validate_official.py` (both models, the baselines, the
-  three-level comparison) and the census-only / images-only switches.
+- `python scripts/validate_official.py [--offline] [--runs N] [--provider claude|mistral|both]
+  [--ids 1,4]` → `output/official_validation/report_<provider>.json`. The comparison is in
+  `ber_automation/evaluation/official_compare.py` (no API calls, unit-tested):
+  - **(a) inputs:** pipeline's dwelling type, era, floor area (gross L × W × storeys against
+    DEAP's total floor area), and storeys / heating when recorded, against the certificate.
+  - **(b) certificate values:** the calculator on the pipeline's inputs with the certificate's
+    era, floor area (length and width scaled by one factor, plan shape kept), dwelling kind
+    (the pipeline's shared side kept when the kind agrees, else the length side), and storeys
+    and heating when recorded. The register gives no storeys, heating or U-values, so this is
+    calculator error plus those unknown inputs, not the calculator on full certificate inputs.
+  - **(c) pipeline:** band and primary kWh/m²/yr against the official BER (exact, within one
+    band, signed band offset, kWh % error). Summaries count every run (n = homes × runs); run
+    agreement = share of runs giving the commonest band.
+  - **Baseline:** commonest band among the other homes (leave-one-out; ties go towards C1),
+    kWh = their median in that band. On the 13 homes: exact 5/13, within one 6/13 (C3 is 5 of 13).
+- **First live check (2026-11-13, home 1, R35 HH93, Claude, 1 run):** official C2 177; pipeline
+  B1 87 (−51%), with era 1990–2000 from the census (certificate 2001) and 10 × 8 m × 2 = 160 m²
+  (certificate 137 m², +17%; 10 × 8 m is the OpenCV default). With the certificate's era and area
+  (b) gives A3 71 (−60%): the calculator's 2000–2010 era is far more efficient than DEAP rated
+  this house. One home only; the full run is still to do.
+- Not built yet: census-only / images-only switches (the remaining baselines).
 
 ## Daft Validation (`scripts/validate_daft.py`)
 
@@ -663,7 +683,7 @@ coordinate are the same, so the inputs match.
   (see *Vision Model Providers*); compared with an assessor, not official BERs.
 
 ### Test Coverage
-- 189 tests total (`tests/test_add_official_home.py`: register text parsed, row saved and passes the checker, re-ask on bad answers, duplicates refused, band/kWh mismatch not saved, ids continue; `tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 199 tests total (`tests/test_official_compare.py`: band distance, score signs, inputs compared only when recorded, certificate values put in (area scaled, plan shape and shared side kept), leave-one-out baseline and its tie rule, summaries, run agreement; `tests/test_add_official_home.py`: register text parsed, row saved and passes the checker, re-ask on bad answers, duplicates refused, band/kWh mismatch not saved, ids continue; `tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0;
@@ -739,5 +759,5 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
   Paper*); the sample itself is still to be collected.
 - Next for the paper: a valid Mistral key and the two-model comparison on the 5 Cork
   homes; the first 10 to 20 sample rows, to learn what the register provides;
-  `scripts/validate_official.py` with the baselines and the three-level comparison;
-  census-only and images-only switches.
+  census-only and images-only switches (`scripts/validate_official.py` exists; see
+  *Official-BER Sample for the Paper*).

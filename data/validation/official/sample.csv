@@ -1,2 +1,18 @@
 ﻿id,eircode,county,settlement,listing_source,date_recorded,ber_number,ber_band,ber_kwh_m2_yr,listing_url,dwelling_type,year_built,floor_area_m2,storeys,heating,register_checked,notes
 1,R35 HH93,Offaly,urban,daft.ie,2026-11-13,113779219,C2,177.03,https://www.daft.ie/for-sale/13-harbour-drive-tullamore-co-offaly/6707192,semi_detached,2001,137.17,,,yes,"Register: issued 2021-04-21, existing dwelling, DEAP 4.0.0, CO2 45.95 kg/m2/yr"
+2,K36 HA21,Dublin,rural,daft.ie,2026-11-13,113514087,A2,49.4,https://www.daft.ie/for-sale/14-beresford-avenue-donabate-donabate-co-dublin/6721307,semi_detached,2020,110.24,2,,yes,Register: issued 04/11/2020
+3,D14 XF20,Dublin,urban,daft.ie,2026-11-13,106875057,C3,219.94,https://www.daft.ie/for-sale/24-whitebeam-avenue-clonskeagh-dublin-14/6647126,detached,1940,204.81,,,yes,Register: issued 26-06-2019
+4,R51 KT72,Kildare,urban,daft.ie,2026-11-13,112899224,A3,55.71,https://www.daft.ie/for-sale/5-wavertree-kildare-co-kildare/6721296,semi_detached,2020,134.58,,,yes,Register: issued 05-02-2020
+5,A83 Y660,Meath,rural,daft.ie,2026-11-13,119385698,C3,201.04,https://www.daft.ie/for-sale/3-beech-walk-coill-fadha-longwood-co-meath/6589080,semi_detached,2001,119.91,,,yes,Register: issued 30/04/2026
+6,K67 XA07,Dublin,rural,daft.ie,2026-11-13,101425320,C3,211.68,https://www.daft.ie/for-sale/hill-house-thornton-swords-co-dublin/6695310,detached,1935,201.8,,,yes,Register: issued 26/09/2022
+7,K36 HW08,Dublin,urban,daft.ie,2026-11-13,119364487,D2,276.5,https://www.daft.ie/for-sale/155-biscayne-malahide-malahide-co-dublin/6659492,detached,1974,164.3,,,yes,Register: issued 24-04-2026
+8,T12 D2YR,Cork,rural,daft.ie,2026-11-13,119386902,C3,214.79,https://www.daft.ie/for-sale/bracken-house-monees-maryborough-hill-douglas-cork/6581242,detached,1981,337.5,,,yes,Register: issued 01/05/2026
+9,T12 FKT1,Cork,urban,daft.ie,2026-11-13,110602588,A3,58.38,https://www.daft.ie/for-sale/4-feirm-bawn-doughcloyne-wilton-cork/6659726,detached,2017,127.95,,,yes,Register: issued 15/01/2018
+10,T12 EV9V,Cork,rural,daft.ie,2026-11-13,112435912,A3,51.39,https://www.daft.ie/for-sale/23-gleann-rga-barrettshill-ballinhassig-co-cork/6710000,semi_detached,2018,152.3,,,yes,Register: issued 17/07/2019
+11,P17 HW84,Cork,urban,daft.ie,2026-11-13,116029273,C3,202.09,https://www.daft.ie/for-sale/leighmoney-house-leighmoney-more-dunderrow-kinsale-co-cork/6700907,detached,1913,452.82,,,yes,Register: issued 24/11/2022
+12,P25 R9X8,Cork,urban,daft.ie,2026-11-13,118524214,A2,37.17,https://www.daft.ie/for-sale/61-charleston-woods-castleredmond-midleton-co-cork/6601488,semi_detached,2025,119.37,,,yes,Register: issued 16/06/2025
+13,P43 K277,Cork,rural,daft.ie,2026-11-13,113798946,A3,63.96,https://www.daft.ie/for-sale/beechville-house-brookwood-french-furze-crosshaven-road-co-cork/6523549,detached,2000,548.28,,,yes,Register: issued 12/10/2023
+14,X91 A3V9,Waterford,urban,daft.ie,2026-11-13,119526655,D1,227.08,https://www.daft.ie/for-sale/14-ashley-crescent-cherrymount-waterford-city-centre-co-waterford/6721526,semi_detached,1996,91.1,,,yes,Register: issued 15/06/2026
+15,V92 NFR9,Kerry,urban,daft.ie,2026-11-13,119993533,D2,268.17,https://www.daft.ie/for-sale/saint-gabriels-3-caherina-tralee-co-kerry/6677599,semi_detached,1930,91.74,,,yes,Register: issued 21/10/2026
+16,V93 C7N8,Kerry,rural,daft.ie,2026-11-13,120083696,B2,120,https://www.daft.ie/for-sale/53-pairc-chuimin-kilcummin-killarney-co-kerry/6718749,semi_detached,1998,117,,,yes,
+17,D14 X086,Dublin,urban,daft.ie,2026-11-13,117591131,D1,240.07,https://www.daft.ie/for-sale/3-butterfield-avenue-rathfarnham-dublin-14/6721661,detached,1936,100.69,,,yes,Register: issued 30/10/2025
