@@ -424,8 +424,9 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 ## Official-BER Sample for the Paper (`data/validation/official/`, Nov 2026)
 
 - `sample.csv`: one row per home, filled in by hand from property listings and checked
-  against SEAI's register (no scraping). 13 homes on 2026-11-13 (Cork 6, Dublin 4, Kildare,
-  Meath, Offaly; bands A2 to D2, none E to G yet). Columns and
+  against SEAI's register (no scraping). 20 homes on 2026-11-17 (Cork 7, Dublin 7, Kerry 2,
+  Kildare, Meath, Offaly, Waterford; 12 urban, 8 rural; bands A2 to D2, none E to G yet).
+  Columns and
   the collection steps are in the `README.md` next to it. Required: `id`, `eircode`,
   `county`, `settlement` (urban/rural), `listing_source`, `date_recorded`, `ber_number`
   (9 digits), `ber_band`, `ber_kwh_m2_yr`. Optional, from the certificate or register:
@@ -438,8 +439,23 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   required value is left out; a bad optional value is reported and dropped.
   `OfficialHome.epoch` maps `year_built` to the calculator's era; `summarise()` counts
   homes per county, settlement, dwelling type, era and band.
-- `python scripts/add_official_home.py`: step-by-step checklist for manual lookups (listing
-  values, then the register values). Each answer is checked as typed (Eircode, 9-digit BER
+- `python scripts/add_official_home.py`: checklist for manual lookups (listing values, then
+  the register values). **Default since 2026-11-17 is clipboard mode:** per home the user
+  pastes the listing link, copies the listing page (Ctrl+A, Ctrl+C) and presses Enter,
+  answers urban/rural, copies the register result page and presses Enter, then confirms.
+  `parse_listing_text` finds the Eircode (only when the page shows exactly one; several
+  are listed and asked for) and the number after "BER No"/"BER Number";
+  `county_from_listing_url` reads the county from the link; `parse_register_text` reads the
+  values after the labels "Building Energy Rating", "Dwelling Type", "Year Of
+  Construction", "Floor Area", "Date Of Issue" (same line or the next). Anything not found
+  is asked for; a register page that does not show the home's BER number or a rating must
+  be copied again ("type" to type the values). The clipboard is read with tkinter
+  (`read_clipboard`); `run(..., clipboard=...)` takes any function, which is how the tests
+  drive it. Clipboard mode does not ask for storeys, heating or notes; `--type` gives the
+  old mode that asks for every value. **The parsers are tested only on invented page text
+  (2026-11-18); not yet tried on a real daft.ie or register page.** If a real page is
+  missed, get the copied text from the user and adjust the patterns.
+  Each answer is checked as typed (Eircode, 9-digit BER
   number, duplicates, band vs kWh, houses only); a row is saved only when `check_row`
   passes, with the next id, today's date and `register_checked=yes`. Register text can be
   pasted as shown ("C2 177.03 (kWh/m2/yr)", "Semi-detached house", "137.17 (m2)"):
@@ -756,7 +772,14 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
   baseline, HWB-versus-DEAP error separated from perception error), and target venues with
   dates (SBE27 Delft abstract due 18 Dec 2026).
 - The official-BER sample format and its checker exist (see *Official-BER Sample for the
-  Paper*); the sample itself is still to be collected.
+  Paper*); the sample is being collected: 20 of about 250 homes on 2026-11-17, none in
+  bands E to G yet.
+- **Resume here (2026-11-18):** the clipboard mode of `scripts/add_official_home.py` is
+  committed on branch `official-validation` but untried on real pages. First step: the
+  user adds one home against a scratch copy of the sample
+  (`python scripts/add_official_home.py <copy.csv>`); fix `parse_listing_text` /
+  `parse_register_text` from the copied text if values are missed, then continue
+  collecting.
 - Next for the paper: a valid Mistral key and the two-model comparison on the 5 Cork
   homes; the first 10 to 20 sample rows, to learn what the register provides;
   census-only and images-only switches (`scripts/validate_official.py` exists; see

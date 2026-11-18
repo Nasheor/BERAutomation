@@ -2,12 +2,14 @@
 
 Usage:
     python scripts/add_official_home.py
+    python scripts/add_official_home.py --type
     python scripts/add_official_home.py path/to/other.csv
 
-For each home it asks for the values from the property listing, then tells you which BER
-number to look up on the SEAI register (by hand, in your browser) and asks for the values
-shown there. Every answer is checked as you type it; a home is saved only when the whole
-row passes the same checks as scripts/check_official_sample.py. No web requests.
+For each home you open the listing and the SEAI register in your browser, by hand, and
+copy each page (Ctrl+A, Ctrl+C); the script reads the values from the clipboard and asks
+only for what it cannot find there. With --type it asks for every value instead. Every
+value is checked; a home is saved only when the whole row passes the same checks as
+scripts/check_official_sample.py. No web requests.
 Type "skip" at any question to drop the current home, "quit" to stop.
 """
 
@@ -30,11 +32,14 @@ from ber_automation.evaluation.official_sample import (  # noqa: E402
     TARGET_COUNTIES,
     TARGET_HOMES,
     check_row,
+    county_from_listing_url,
     dwelling_from_register,
     first_number,
     load_official_sample,
     normalise_eircode,
+    parse_listing_text,
     parse_rating,
+    parse_register_text,
     summarise,
 )
 
@@ -86,8 +91,37 @@ def _url(text: str) -> tuple[str | None, str]:
     return (text, "") if host else (None, "Paste the full link, starting with https://")
 
 
-def run(path: Path, read=input, today: date | None = None) -> int:
-    """The checklist loop. Returns the number of homes added."""
+def read_clipboard() -> str:
+    """The text on the clipboard ("" when it holds no text)."""
+    import tkinter
+
+    root = tkinter.Tk()
+    root.withdraw()
+    try:
+        return root.clipboard_get()
+    except tkinter.TclError:
+        return ""
+    finally:
+        root.destroy()
+
+
+def _wait(prompt: str, read) -> str:
+    """Wait for Enter; returns what was typed, lower-case. Raises Skip or Quit."""
+    answer = read(f"  {prompt}: ").strip().lower()
+    if answer == "skip":
+        raise Skip
+    if answer == "quit":
+        raise Quit
+    return answer
+
+
+def run(path: Path, read=input, today: date | None = None,
+        clipboard: Callable[[], str] | None = None) -> int:
+    """The checklist loop. Returns the number of homes added.
+
+    With *clipboard* (a function returning the clipboard text) the values are read from
+    the copied listing and register pages; without it every value is asked for.
+    """
     today = today or date.today()
     homes, problems = load_official_sample(path)
     if problems:
@@ -107,7 +141,7 @@ def run(path: Path, read=input, today: date | None = None) -> int:
     while True:
         print(f"\n=== Home {next_id} ===")
         try:
-            row = _ask_home(read, eircodes, ber_numbers)
+            row = _ask_home(read, eircodes, ber_numbers, clipboard)
         except Skip:
             print("  Skipped; nothing saved.")
             continue
@@ -147,10 +181,30 @@ def run(path: Path, read=input, today: date | None = None) -> int:
     return added
 
 
-def _ask_home(read, eircodes: set[str], ber_numbers: set[str]) -> dict[str, str]:
-    """Ask for one home's values. Raises Skip or Quit."""
+def _ask_home(read, eircodes: set[str], ber_numbers: set[str],
+              clipboard: Callable[[], str] | None = None) -> dict[str, str]:
+    """Get one home's values, from the copied pages or by asking. Raises Skip or Quit."""
+    found: dict[str, str] = {}
+
+    def get(key: str, prompt: str, check, optional: bool = False) -> str:
+        """The value found on the copied page when it passes *check*, else ask for it."""
+        text = found.get(key, "")
+        if text:
+            value, message = check(text)
+            if value is not None:
+                print(f"  {prompt}: {value}")
+                return value
+            print(f"  {prompt}: found {text!r}. {message}")
+        return ask(prompt, check, read, optional)
+
     print("  From the listing:")
     url = ask("Listing link", _url, read)
+    if clipboard:
+        _wait("Copy the listing page (Ctrl+A, Ctrl+C), then press Enter", read)
+        found.update(parse_listing_text(clipboard()))
+        found["county"] = county_from_listing_url(url)
+        if "eircode_candidates" in found:
+            print(f"  The page shows several Eircodes: {found['eircode_candidates']}")
 
     def eircode_check(text: str) -> tuple[str | None, str]:
         code = normalise_eircode(text)
@@ -168,23 +222,41 @@ def _ask_home(read, eircodes: set[str], ber_numbers: set[str]) -> dict[str, str]
             return None, f"BER {number} is already in the sample. Type 'skip'."
         return number, ""
 
-    eircode = ask("Eircode", eircode_check, read)
-    county = ask("County (e.g. Cork)", lambda t: (t.strip().title(), ""), read)
+    eircode = get("eircode", "Eircode", eircode_check)
+    county = get("county", "County (e.g. Cork)", lambda t: (t.strip().title(), ""))
     settlement = ask("urban or rural", _one_of(("urban", "rural")), read)
-    ber_number = ask("BER number (9 digits)", ber_number_check, read)
-    storeys = ask("Storeys, if the listing says (Enter to leave out)",
-                  lambda t: (t, "") if t in ("1", "2", "3", "4") else (None, "1 to 4"),
-                  read, optional=True)
-    heating = ask("Heating, if the listing says (Enter to leave out)",
-                  _one_of(HEATING_VALUES), read, optional=True)
+    ber_number = get("ber_number", "BER number (9 digits)", ber_number_check)
+    storeys = heating = ""
+    if not clipboard:
+        storeys = ask("Storeys, if the listing says (Enter to leave out)",
+                      lambda t: (t, "") if t in ("1", "2", "3", "4") else (None, "1 to 4"),
+                      read, optional=True)
+        heating = ask("Heating, if the listing says (Enter to leave out)",
+                      _one_of(HEATING_VALUES), read, optional=True)
 
     print(f"\n  Now on the SEAI register ({REGISTER_URL}), search {ber_number}:")
+    while clipboard:
+        answer = _wait("Copy the result page (Ctrl+A, Ctrl+C), then press Enter "
+                       "('type' to type the values)", read)
+        if answer == "type":
+            break
+        text = clipboard()
+        if ber_number not in "".join(text.split()):
+            print(f"    The copied page does not show BER {ber_number}. Copy it again.")
+            continue
+        values = parse_register_text(text)
+        if "rating" not in values:
+            print("    No Building Energy Rating on the copied page. Copy it again.")
+            continue
+        found.update(values)
+        break
 
     def rating_check(text: str) -> tuple[str | None, str]:
         rating = parse_rating(text)
         return (text, "") if rating else (None, "Copy it as shown, e.g. 'C2 177.03'.")
 
-    rating = parse_rating(ask("Building Energy Rating (e.g. C2 177.03)", rating_check, read))
+    rating = parse_rating(get("rating", "Building Energy Rating (e.g. C2 177.03)",
+                              rating_check))
 
     def dwelling_check(text: str) -> tuple[str | None, str]:
         value = dwelling_from_register(text)
@@ -193,14 +265,15 @@ def _ask_home(read, eircodes: set[str], ber_numbers: set[str]) -> dict[str, str]
         return None, (f"Houses only ({', '.join(DWELLING_TYPES)}). For a flat or "
                       "maisonette, type 'skip'.")
 
-    dwelling = ask("Dwelling Type (e.g. Semi-detached house)", dwelling_check, read)
-    year = ask("Year Of Construction",
-               lambda t: (first_number(t), "") if first_number(t) else (None, "e.g. 2001"), read)
-    area = ask("Floor Area",
-               lambda t: (first_number(t), "") if first_number(t) else (None, "e.g. 137.17"),
-               read)
-    issued = ask("Date Of Issue (Enter to leave out)", lambda t: (t, ""), read, optional=True)
-    notes = ask("Notes (Enter for none)", lambda t: (t, ""), read, optional=True)
+    dwelling = get("dwelling", "Dwelling Type (e.g. Semi-detached house)", dwelling_check)
+    year = get("year", "Year Of Construction",
+               lambda t: (first_number(t), "") if first_number(t) else (None, "e.g. 2001"))
+    area = get("area", "Floor Area",
+               lambda t: (first_number(t), "") if first_number(t) else (None, "e.g. 137.17"))
+    issued = get("issued", "Date Of Issue (Enter to leave out)", lambda t: (t, ""),
+                 optional=True)
+    notes = "" if clipboard else ask("Notes (Enter for none)", lambda t: (t, ""), read,
+                                     optional=True)
     if issued:
         notes = f"Register: issued {issued}" + (f"; {notes}" if notes else "")
 
@@ -230,9 +303,17 @@ def _print_progress(homes, added: int) -> None:
 
 
 def main() -> int:
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SAMPLE
+    args = [a for a in sys.argv[1:] if a != "--type"]
+    path = Path(args[0]) if args else DEFAULT_SAMPLE
+    clipboard = None if "--type" in sys.argv[1:] else read_clipboard
+    if clipboard:
+        try:
+            read_clipboard()
+        except Exception:  # no tkinter or no display: fall back to typing
+            print("Cannot read the clipboard here; asking for every value instead.")
+            clipboard = None
     try:
-        run(path)
+        run(path, clipboard=clipboard)
     except (EOFError, KeyboardInterrupt):
         print("\nStopped. Homes saved so far are kept.")
     return 0

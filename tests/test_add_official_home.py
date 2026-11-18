@@ -8,10 +8,13 @@ import pytest
 
 from ber_automation.evaluation.official_sample import (
     COLUMNS,
+    county_from_listing_url,
     dwelling_from_register,
     first_number,
     load_official_sample,
+    parse_listing_text,
     parse_rating,
+    parse_register_text,
 )
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "add_official_home.py"
@@ -129,3 +132,80 @@ def test_ids_continue_from_the_sample(sample):
     assert problems == []
     assert [h.id for h in homes] == ["1", "2"]
     assert homes[1].storeys == 2 and homes[1].heating.value == "gas_boiler"
+
+
+LISTING_PAGE = """13 Harbour Drive, Tullamore, Co. Offaly, R35HH93
+4 Bed  3 Bath  137 sq m  Semi-D
+BER No: 113779219
+Energy Performance Indicator: 177.03 kWh/m2/yr
+"""
+
+REGISTER_PAGE = """BER Number\t113779219
+Building Energy Rating\tC2  177.03 (kWh/m2/yr)
+Date Of Issue\t21-04-2021
+Dwelling Type\tSemi-detached house
+Year Of Construction\t2001
+Floor Area\t137.17 (m2)
+"""
+
+
+def _clipboard(*pages):
+    pages = iter(pages)
+    return lambda: next(pages)
+
+
+def test_county_from_listing_url():
+    base = "https://www.daft.ie/for-sale/"
+    assert county_from_listing_url(TULLAMORE[0]) == "Offaly"
+    assert county_from_listing_url(base + "24-whitebeam-avenue-clonskeagh-dublin-14/6647126") == "Dublin"
+    assert county_from_listing_url(base + "bracken-house-douglas-cork/6581242") == "Cork"
+    assert county_from_listing_url(base + "1-main-street-athlone-co-westmeath/1") == "Westmeath"
+    assert county_from_listing_url("https://www.daft.ie/x/1") == ""
+
+
+def test_parse_listing_text():
+    assert parse_listing_text(LISTING_PAGE) == {"eircode": "R35 HH93", "ber_number": "113779219"}
+    assert parse_listing_text("nothing here, phone 0871234567") == {}
+    several = parse_listing_text(LISTING_PAGE + "Agent: 1 High St, T12 K7AC")
+    assert "eircode" not in several
+    assert several["eircode_candidates"] == "R35 HH93, T12 K7AC"
+
+
+def test_parse_register_text_with_values_on_the_next_line():
+    text = ("Building Energy Rating\nC2\n177.03 (kWh/m2/yr)\nDwelling Type\n"
+            "Mid-terrace house\nYear Of Construction:\n1983\nFloor Area: 50.6 (m2)\n")
+    assert parse_register_text(text) == {
+        "rating": "C2 177.03 (kWh/m2/yr)", "dwelling": "Mid-terrace house",
+        "year": "1983", "area": "50.6 (m2)",
+    }
+
+
+def test_clipboard_mode_asks_only_for_what_the_pages_do_not_show(sample):
+    answers = [TULLAMORE[0], "", "urban", "", "y", "quit"]
+    added = add_official_home.run(sample, read=_reader(answers), today=date(2026, 11, 13),
+                                  clipboard=_clipboard(LISTING_PAGE, REGISTER_PAGE))
+    assert added == 1
+    homes, problems = load_official_sample(sample)
+    assert problems == []
+    (home,) = homes
+    assert (home.eircode, home.county, home.ber_number) == ("R35 HH93", "Offaly", "113779219")
+    assert (home.ber_band, home.ber_kwh_m2_yr) == ("C2", 177.03)
+    assert (home.dwelling_type, home.year_built, home.floor_area_m2) == ("semi_detached", 2001, 137.17)
+    assert home.notes == "Register: issued 21-04-2021"
+
+
+def test_clipboard_mode_asks_again_when_the_wrong_page_was_copied(sample):
+    # Enter pressed with the listing still on the clipboard, then with the register page
+    answers = [TULLAMORE[0], "", "urban", "", "", "y", "quit"]
+    added = add_official_home.run(
+        sample, read=_reader(answers),
+        clipboard=_clipboard(LISTING_PAGE, LISTING_PAGE, REGISTER_PAGE))
+    assert added == 1
+
+
+def test_clipboard_mode_falls_back_to_asking(sample):
+    answers = [TULLAMORE[0], "", "R35 HH93", "Offaly", "urban", "113779219", "type",
+               "C2 177.03", "Semi-detached house", "2001", "137.17", "", "y", "quit"]
+    added = add_official_home.run(sample, read=_reader(answers),
+                                  clipboard=_clipboard("no values on this page"))
+    assert added == 1

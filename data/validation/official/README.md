@@ -1,12 +1,17 @@
 # Official-BER sample
 
 `sample.csv` holds the homes used to compare the pipeline with official Building Energy
-Ratings: one row per home. It is filled in by hand. The easiest way is the checklist,
-which asks for each value, checks it as you type and saves only complete, valid rows:
+Ratings: one row per home. It is filled in by hand. The easiest way is the checklist:
+you copy the listing page and the register page (Ctrl+A, Ctrl+C) and it reads the values
+from the clipboard, asks only for what it cannot find, checks everything and saves only
+complete, valid rows:
 
 ```
 python scripts/add_official_home.py
 ```
+
+It makes no web requests; you still open both pages yourself. To type every value
+instead (and to record storeys, heating or a note), add `--type`.
 
 Check the whole sample at any time with:
 
@@ -33,7 +38,9 @@ and shows how the sample is spread over counties, dwelling types, eras and bands
    by hand: the search is protected against automated use. Copy the Building Energy
    Rating (band and kWh), Dwelling Type, Year Of Construction, Floor Area and Date Of Issue.
    The register does not show storeys or heating.
-3. `add_official_home.py` asks for these in this order and sets `register_checked` to `yes`.
+3. `add_official_home.py` takes these in this order and sets `register_checked` to `yes`.
+   Per home: paste the listing link, copy the listing page and press Enter, answer
+   urban/rural, copy the register result page and press Enter, then confirm the row.
    Typing "skip" drops the current home, "quit" stops; saved homes are kept.
 
 ## Columns

@@ -241,6 +241,95 @@ def first_number(text: str) -> str:
     return match.group(0).replace(",", "") if match else ""
 
 
+_COUNTIES: tuple[str, ...] = (
+    "Carlow", "Cavan", "Clare", "Cork", "Donegal", "Dublin", "Galway", "Kerry", "Kildare",
+    "Kilkenny", "Laois", "Leitrim", "Limerick", "Longford", "Louth", "Mayo", "Meath",
+    "Monaghan", "Offaly", "Roscommon", "Sligo", "Tipperary", "Waterford", "Westmeath",
+    "Wexford", "Wicklow",
+)
+_EIRCODE_IN_TEXT = re.compile(r"\b(?:[AC-FHKNPRTV-Y]\d{2}|D6W)\s?[0-9AC-FHKNPRTV-Y]{4}\b")
+_BER_NUMBER_IN_TEXT = re.compile(
+    r"BER\s*(?:No|Number)\.?\s*:?\s*(\d{3}\s?\d{3}\s?\d{3})(?!\d)", re.IGNORECASE
+)
+_REGISTER_LABELS: dict[str, str] = {
+    "rating": "Building Energy Rating",
+    "dwelling": "Dwelling Type",
+    "year": "Year Of Construction",
+    "area": "Floor Area",
+    "issued": "Date Of Issue",
+}
+
+
+def county_from_listing_url(url: str) -> str:
+    """The county a listing link ends with (".../13-harbour-drive-tullamore-co-offaly/670"
+    → "Offaly", "...-clonskeagh-dublin-14/664" → "Dublin"), or "" when it names none."""
+    for part in reversed(url.lower().split("?")[0].rstrip("/").split("/")):
+        if part.isdigit():
+            continue
+        slug = re.sub(r"-(?:city|\d+w?)$", "", part)
+        for county in _COUNTIES:
+            if slug == county.lower() or slug.endswith(f"-{county.lower()}"):
+                return county
+        return ""
+    return ""
+
+
+def parse_listing_text(text: str) -> dict[str, str]:
+    """The Eircode and BER number in the copied text of a listing page.
+
+    Returns only what is found without doubt: "eircode" when the page shows exactly one
+    Eircode, "ber_number" when a 9-digit number follows "BER No" or "BER Number". When
+    the page shows several Eircodes they are returned, comma-separated, as
+    "eircode_candidates".
+    """
+    found: dict[str, str] = {}
+    eircodes = list(dict.fromkeys(
+        code for code in map(normalise_eircode, _EIRCODE_IN_TEXT.findall(text)) if code
+    ))
+    if len(eircodes) == 1:
+        found["eircode"] = eircodes[0]
+    elif eircodes:
+        found["eircode_candidates"] = ", ".join(eircodes)
+    numbers = {re.sub(r"\s", "", n) for n in _BER_NUMBER_IN_TEXT.findall(text)}
+    if len(numbers) == 1:
+        found["ber_number"] = numbers.pop()
+    return found
+
+
+def parse_register_text(text: str) -> dict[str, str]:
+    """The values in the copied text of a SEAI register result page.
+
+    Looks for each label ("Building Energy Rating", "Dwelling Type", "Year Of
+    Construction", "Floor Area", "Date Of Issue") and takes the text after it, on the same
+    line or the next. Returns the keys "rating", "dwelling", "year", "area" and "issued"
+    for the values found; the texts are as shown on the page.
+    """
+    usable = {
+        "rating": lambda v: parse_rating(v) is not None,
+        "dwelling": lambda v: True,
+        "year": lambda v: bool(first_number(v)),
+        "area": lambda v: bool(first_number(v)),
+        "issued": lambda v: any(c.isdigit() for c in v),
+    }
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    found: dict[str, str] = {}
+    for key, label in _REGISTER_LABELS.items():
+        for i, line in enumerate(lines):
+            if not line.lower().startswith(label.lower()):
+                continue
+            same_line = line[len(label):].strip(" \t:")
+            following = lines[i + 1] if i + 1 < len(lines) else ""
+            # The value follows the label on its line or on the next; a rating may be
+            # split over both ("C2", then "177.03 (kWh/m2/yr)")
+            candidates = [same_line, f"{same_line} {following}"] if same_line else \
+                [following, " ".join(lines[i + 1:i + 3])]
+            value = next((c for c in candidates if c.strip() and usable[key](c)), None)
+            if value:
+                found[key] = value.strip()
+                break
+    return found
+
+
 def load_official_sample(path: str | Path) -> tuple[list[OfficialHome], list[str]]:
     """Read the sample CSV.
 
