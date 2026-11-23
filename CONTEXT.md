@@ -421,6 +421,44 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   both models; a weak result is a finding, not something to tune away.
 - After the refactor a live Claude run of `T12 K7AC` gave A3, 67 kWh/m²/yr, as before.
 
+## Calculation Inputs, Presets and the Energy Diagram (app, 2026-11-23)
+
+Made for the supervisor's review of the live app ("show the current window U-value and where it
+comes from", "what are internal gains", "HWB units wrong: HWB × floor area", "redraw the chart
+as a house with gains, heating and hot water in kWh/yr").
+
+- **Presets the user can change:** `CalculationOverrides` (`models.py`) holds optional `u_wall`,
+  `u_roof`, `u_floor`, `u_window`, `g_value`, `window_share`, `air_change_rate`,
+  `internal_gain_w_m2`, `heating_efficiency`; `BuildingInput.overrides` (None = all presets).
+  `resolve_presets(building)` (`calculator.py`) gives the values in use: era table U/g, window
+  share by type, 0.4 ach, 3.75 W/m², efficiency by heating system, then the overrides on top.
+  The calculator reads only from it, so without overrides every result is unchanged (checked on
+  400 combinations of type, era, country and heating before and after). Retrofit insulation is
+  added to the U-values in use, not the era table; a new heating system drops an efficiency the
+  user had set for the old one.
+- **HWBResult** now also holds the annual balance and its parts: `transmission_loss_kwh`,
+  `ventilation_loss_kwh` (kWh/yr; `transmission_heat_loss`/`ventilation_heat_loss` stay in W/K),
+  areas, thermal bridge, HDD, heating days, residents, `presets`. All have defaults, so older
+  saved results still load (the app asks to recalculate them for the diagram).
+- `ber_automation/ber_engine/inputs.py`: `calculation_inputs(building, sources)` lists every value
+  used with its origin (images / census / preset / set by you / country climate) and its source
+  (Excel sheet and cell, OIB guidance, degreedays.net, PHPP, SEAI). `energy_formulas(ber)` writes
+  each result as its formula with the home's numbers. `PipelineResult.dimensions_source`
+  ("satellite"/"default"/"override") and `type_source` ("streetview"/"default"/"override") were
+  added so the footprint and type origins are known.
+- **App:** the mixed-unit bar chart (W/K, kWh/yr and kWh/m²/yr on one axis) is gone. The gauge
+  moved to the top row; below it `app/energy_diagram.py` draws the house (internal and solar gains
+  in, heating from the boiler = HWB × floor area, transmission and ventilation out, hot-water
+  tank), all kWh/yr, arrow width by size, with a line checking losses = gains + heating. HWB is
+  shown per m² and as kWh/yr. Expanders: "How these numbers are calculated" and "Calculation
+  inputs" (open on the main result). What-If and Manual Input have an **Assumptions** tab
+  (presets pre-filled, changed ones listed, "Reset to presets"; they restart at the new presets
+  when era, type or heating changes). The retrofit window slider starts at the current window U.
+- Checked headlessly with `streamlit.testing.v1.AppTest` (manual mode and a ready-made pipeline
+  result): window U 3.0 → 1.2 on a pre-1980 detached house moves primary energy 188 → 164.
+- **Open:** the supervisor's "cap the number of solar panels per house": the app has no PV; the
+  user is asking what was meant.
+
 ## Official-BER Sample for the Paper (`data/validation/official/`, Nov 2026)
 
 - `sample.csv`: one row per home, filled in by hand from property listings and checked
@@ -699,7 +737,7 @@ coordinate are the same, so the inputs match.
   (see *Vision Model Providers*); compared with an assessor, not official BERs.
 
 ### Test Coverage
-- 199 tests total (`tests/test_official_compare.py`: band distance, score signs, inputs compared only when recorded, certificate values put in (area scaled, plan shape and shared side kept), leave-one-out baseline and its tie rule, summaries, run agreement; `tests/test_add_official_home.py`: register text parsed, row saved and passes the checker, re-ask on bad answers, duplicates refused, band/kWh mismatch not saved, ids continue; `tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 230 tests total (`tests/test_calculator.py` presets and overrides: presets by era/type/heating, empty overrides change nothing, each override moves the demand the right way, retrofit on overridden U, efficiency dropped with a new system, energy balance closes, old results load; `tests/test_calculation_inputs.py`: origins from pipeline sources, manual input, overrides, formulas with the home's numbers; `tests/test_energy_diagram.py`: every flow labelled in kWh/yr, balance line, no heating needed; `tests/test_official_compare.py`: band distance, score signs, inputs compared only when recorded, certificate values put in (area scaled, plan shape and shared side kept), leave-one-out baseline and its tie rule, summaries, run agreement; `tests/test_add_official_home.py`: register text parsed, row saved and passes the checker, re-ask on bad answers, duplicates refused, band/kWh mismatch not saved, ids continue; `tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0;

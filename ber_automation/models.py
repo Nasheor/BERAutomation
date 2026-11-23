@@ -74,6 +74,28 @@ class WindowDoorAreas(BaseModel):
     doors: float = 0.0
 
 
+class CalculationOverrides(BaseModel):
+    """Values the user sets in place of the calculator's presets (None = use the preset)."""
+    u_wall: Optional[float] = Field(default=None, gt=0, description="External wall U-value W/m²K")
+    u_roof: Optional[float] = Field(default=None, gt=0, description="Roof U-value W/m²K")
+    u_floor: Optional[float] = Field(default=None, gt=0, description="Ground floor U-value W/m²K")
+    u_window: Optional[float] = Field(default=None, gt=0, description="Window U-value W/m²K")
+    g_value: Optional[float] = Field(default=None, gt=0, le=1, description="Glazing solar transmittance")
+    window_share: Optional[float] = Field(
+        default=None, gt=0, lt=1, description="Window and door area as a share of the outer wall area",
+    )
+    air_change_rate: Optional[float] = Field(default=None, gt=0, description="Air changes per hour")
+    internal_gain_w_m2: Optional[float] = Field(
+        default=None, ge=0, description="Internal gains, W per m² of net floor area",
+    )
+    heating_efficiency: Optional[float] = Field(
+        default=None, gt=0, description="Heating system efficiency (SCOP for heat pumps)",
+    )
+
+    def is_empty(self) -> bool:
+        return all(v is None for v in self.model_dump().values())
+
+
 class BuildingInput(BaseModel):
     """All inputs needed for the HWB calculation."""
     # Geometry
@@ -97,6 +119,9 @@ class BuildingInput(BaseModel):
     # Heating
     heating_system: HeatingSystem = HeatingSystem.GAS_BOILER
     hot_water_electric_separate: bool = False
+
+    # Presets the user replaced (None = all presets)
+    overrides: Optional[CalculationOverrides] = None
 
     @property
     def floor_area_per_storey(self) -> float:
@@ -208,6 +233,24 @@ class HWBResult(BaseModel):
     co2_kg: float                    # kg CO2/year
     co2_kg_per_m2: float             # kg CO2/m²/year
 
+    # Annual energy balance and the intermediate values behind it, for display.
+    # Defaults keep results saved before Nov 2026 loadable.
+    transmission_loss_kwh: float = 0.0   # kWh/year through walls, roof, floor, windows
+    ventilation_loss_kwh: float = 0.0    # kWh/year with the air exchanged
+    hot_water_final_kwh: float = 0.0     # kWh/year bought for hot water
+    net_area: float = 0.0                # m² (0.8 × gross)
+    window_area: float = 0.0             # m², windows and doors
+    roof_area: float = 0.0               # m² (= footprint)
+    ground_floor_area: float = 0.0       # m² (= footprint)
+    external_wall_area: float = 0.0      # m², outer walls less windows and party walls
+    party_wall_area: float = 0.0         # m²
+    basic_transmission_w_k: float = 0.0  # W/K before the thermal-bridge supplement
+    thermal_bridge_w_k: float = 0.0      # W/K
+    hdd: float = 0.0                     # heating degree days (K·day)
+    heating_days: float = 0.0
+    residents: float = 0.0
+    presets: dict[str, float] = Field(default_factory=dict)  # values used, see CalculationOverrides
+
 
 class BERResult(BaseModel):
     """Final BER rating result."""
@@ -262,6 +305,10 @@ class PipelineResult(BaseModel):
     # "census", "census_urban" (heating only), "streetview", "default" or "override"
     epoch_source: Optional[str] = None
     heating_source: Optional[str] = None
+    # Where the footprint dimensions ("satellite" / "default") and the dwelling type and
+    # storeys ("streetview" / "default") came from; "override" when the user set them
+    dimensions_source: Optional[str] = None
+    type_source: Optional[str] = None
     house_description: Optional[HouseDescription] = None
     # Windows marked on the similar house (see HouseDescription.similar_house_view); 0 if none
     similar_house_windows: int = 0

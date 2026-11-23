@@ -39,17 +39,27 @@ def _load_secrets_into_env() -> None:
 
 _load_secrets_into_env()
 
-from ber_automation.ber_engine.calculator import HWBCalculator
+from app.energy_diagram import balance_line, make_house_energy_diagram
+from ber_automation.ber_engine.calculator import HWBCalculator, resolve_presets
 from ber_automation.ber_engine.constants import BER_BANDS
+from ber_automation.ber_engine.inputs import (
+    ORIGIN_LABELS,
+    PRESET_HELP,
+    PRESET_NAMES,
+    calculation_inputs,
+    energy_formulas,
+)
 from ber_automation.ber_engine.rating import get_ber_band, get_native_epc
 from ber_automation.models import (
     BERResult,
     BuildingInput,
     BuildingType,
+    CalculationOverrides,
     ConstructionEpoch,
     Country,
     HeatingSystem,
     HWBResult,
+    PipelineResult,
     RetrofitInput,
 )
 from ber_automation.pipeline import BERPipeline
@@ -277,51 +287,132 @@ if "uploaded_sv_images" not in st.session_state:
 # Plotly helpers
 # ---------------------------------------------------------------------------
 
-def _make_energy_breakdown_chart(hw: HWBResult) -> go.Figure:
-    """Horizontal bar chart of energy losses vs gains."""
-    categories = [
-        "Transmission Loss",
-        "Ventilation Loss",
-        "Solar Gains",
-        "Internal Gains",
-        "Heating Demand (HWB)",
-        "Hot Water",
-    ]
-    values = [
-        hw.transmission_heat_loss,
-        hw.ventilation_heat_loss,
-        hw.solar_gains,
-        hw.internal_gains,
-        hw.hwb,
-        hw.hot_water_kwh,
-    ]
-    colors = [
-        "#EF4136", "#F47920",  # losses (red-orange)
-        "#4DB848", "#8CC63F",  # gains (greens)
-        "#F99D1C",             # demand (amber)
-        "#00A3E0",             # hot water (blue)
-    ]
-    units = ["W/K", "W/K", "kWh/yr", "kWh/yr", "kWh/m\u00b2/yr", "kWh/yr"]
+ORIGIN_COLORS: dict[str, str] = {
+    "images": "#2E7D32",
+    "census": "#1565C0",
+    "preset": "#6D6D6D",
+    "you": "#C2185B",
+    "climate": "#00838F",
+}
 
-    fig = go.Figure(go.Bar(
-        x=values,
-        y=categories,
-        orientation="h",
-        marker_color=colors,
-        text=[f"{v:,.1f} {u}" for v, u in zip(values, units)],
-        textposition="outside",
-    ))
-    fig.update_layout(
-        height=280,
-        margin=dict(l=10, r=80, t=10, b=10),
-        xaxis_title="",
-        yaxis_title="",
-        xaxis=dict(showticklabels=False),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(size=13),
+
+def _pipeline_sources(pr: PipelineResult) -> dict[str, str | None]:
+    """Where the pipeline took each classified value from, for calculation_inputs()."""
+    return {
+        "dimensions": pr.dimensions_source,
+        "building_type": pr.type_source,
+        "storeys": pr.type_source,
+        "epoch": pr.epoch_source,
+        "heating": pr.heating_source,
+    }
+
+
+def _render_calculation_inputs(building: BuildingInput, sources: dict | None) -> None:
+    """Table of every value the calculation used, with its origin and source."""
+    rows = calculation_inputs(building, sources)
+    html = [
+        "<table style='width:100%; border-collapse:collapse; font-size:13px;'>",
+        "<tr style='text-align:left; border-bottom:2px solid #ddd;'>"
+        "<th>Value</th><th>Used</th><th>Origin</th><th>Source</th></tr>",
+    ]
+    group = None
+    for r in rows:
+        if r.group != group:
+            group = r.group
+            html.append(f"<tr><td colspan='4' style='padding-top:10px;'><b>{group}</b></td></tr>")
+        value = f"{r.value:g}" if isinstance(r.value, float) else str(r.value)
+        color = ORIGIN_COLORS.get(r.origin, "#6D6D6D")
+        tag = (f"<span style='background:{color}; color:white; padding:1px 7px; "
+               f"border-radius:8px; font-size:11px; white-space:nowrap;'>"
+               f"{ORIGIN_LABELS.get(r.origin, r.origin)}</span>")
+        name = r.name
+        if r.key in PRESET_HELP:
+            name = f"<span title='{PRESET_HELP[r.key]}'>{name}</span>"
+        html.append(
+            "<tr style='border-bottom:1px solid #eee;'>"
+            f"<td>{name}</td><td><b>{value}</b> {r.unit}</td><td>{tag}</td>"
+            f"<td style='color:#555;'>{r.source}</td></tr>"
+        )
+    html.append("</table>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+    st.caption(
+        "Presets are the Kaiser Excel tool's values for the construction era, dwelling type and "
+        "heating system. Change them under Customise / What-If → Assumptions."
     )
-    return fig
+
+
+def _render_formulas(ber: BERResult) -> None:
+    """Each energy result as its formula with this home's numbers."""
+    for f in energy_formulas(ber):
+        st.markdown(f"**{f.name}: {f.result}**  \n{f.meaning}")
+        st.code(f.formula, language=None, wrap_lines=True)
+
+
+# Editable presets: (min, max, step, format) for the number inputs
+_PRESET_INPUT: dict[str, tuple[float, float, float, str]] = {
+    "u_window": (0.3, 6.0, 0.05, "%.2f"),
+    "u_wall": (0.05, 3.0, 0.05, "%.3f"),
+    "u_roof": (0.05, 3.0, 0.05, "%.3f"),
+    "u_floor": (0.05, 3.0, 0.05, "%.2f"),
+    "g_value": (0.1, 1.0, 0.01, "%.3f"),
+    "window_share": (0.02, 0.6, 0.01, "%.2f"),
+    "air_change_rate": (0.05, 3.0, 0.05, "%.2f"),
+    "internal_gain_w_m2": (0.0, 10.0, 0.25, "%.2f"),
+    "heating_efficiency": (0.3, 6.0, 0.05, "%.3f"),
+}
+
+
+def _assumption_inputs(
+    building: BuildingInput, key_prefix: str, start: CalculationOverrides | None = None,
+) -> CalculationOverrides | None:
+    """Number inputs for the calculator's presets; returns the values that differ from them.
+
+    *building* gives the era, dwelling type and heating whose presets apply. The inputs start
+    at those presets, or at *start* where given. When the era, type or heating changes the
+    inputs restart at the new presets.
+    """
+    presets = resolve_presets(building.model_copy(update={"overrides": None}))
+    resets = st.session_state.get(f"{key_prefix}_resets", 0)
+    first = resolve_presets(building.model_copy(update={"overrides": start if resets == 0 else None}))
+    st.caption(
+        "Values the calculation uses that are not read from the images. They start at the "
+        "presets for this era, dwelling type and heating system; change any that you know."
+    )
+    if st.button("Reset to presets", key=f"{key_prefix}_reset"):
+        st.session_state[f"{key_prefix}_resets"] = resets + 1
+        st.rerun()
+    suffix = (f"{building.construction_epoch.value}_{building.building_type.value}_"
+              f"{building.heating_system.value}_{resets}")
+    values: dict[str, float] = {}
+    cols = st.columns(3)
+    for i, (key, (name, unit)) in enumerate(PRESET_NAMES.items()):
+        lo, hi, step, fmt = _PRESET_INPUT[key]
+        with cols[i % 3]:
+            values[key] = st.number_input(
+                f"{name} ({unit})" if unit else name,
+                min_value=lo, max_value=hi, value=float(min(max(first[key], lo), hi)),
+                step=step, format=fmt,
+                help=f"{PRESET_HELP[key]} Preset: {presets[key]:g}.",
+                key=f"{key_prefix}_{key}_{suffix}",
+            )
+    changed = {k: v for k, v in values.items() if abs(v - presets[k]) > 1e-6}
+    if building.window_door_areas is not None:
+        changed.pop("window_share", None)
+    if changed:
+        st.info("Changed from the presets: " + ", ".join(
+            f"{PRESET_NAMES[k][0]} {presets[k]:g} → {v:g}" for k, v in changed.items()
+        ))
+    return CalculationOverrides(**changed) if changed else None
+
+
+def _window_u_caption(building: BuildingInput) -> str:
+    p = resolve_presets(building)
+    era = EPOCH_LABELS.get(building.construction_epoch.value, building.construction_epoch.value)
+    who = ("set by you" if building.overrides and building.overrides.u_window is not None
+           else f"preset for {era}")
+    return (f"Current windows: U = {p['u_window']:g} W/m²K ({who}). "
+            "Move the slider below it to model replacement windows "
+            "(double glazing ≈ 1.4, triple ≈ 0.8).")
 
 
 def _make_ber_gauge(band: str, kwh: float) -> go.Figure:
@@ -364,8 +455,12 @@ def _make_ber_gauge(band: str, kwh: float) -> go.Figure:
 # Display BER result
 # ---------------------------------------------------------------------------
 
-def _display_ber(ber: BERResult, key_suffix: str = "main"):
-    """Render the BER result card."""
+def _display_ber(ber: BERResult, key_suffix: str = "main", sources: dict | None = None):
+    """Render the BER result card.
+
+    *sources* says where the pipeline took each classified value from (see
+    ``_pipeline_sources``); None for manual input.
+    """
     st.markdown("<div class='section-header'><h3>BER Rating</h3></div>",
                 unsafe_allow_html=True)
 
@@ -396,26 +491,49 @@ def _display_ber(ber: BERResult, key_suffix: str = "main"):
 
     with col2:
         hw = ber.hwb_result
-        st.plotly_chart(_make_energy_breakdown_chart(hw), use_container_width=True, key=f"breakdown_{key_suffix}")
+        st.plotly_chart(
+            _make_ber_gauge(ber.ber_band, ber.kwh_per_m2),
+            use_container_width=True,
+            key=f"gauge_{key_suffix}",
+        )
 
     with col3:
         st.metric("CO\u2082 Emissions", f"{hw.co2_kg_per_m2:.1f} kg/m\u00b2/yr")
         st.metric("Total CO\u2082", f"{hw.co2_kg:.0f} kg/yr")
 
-    # Key metrics table
+    # Annual energy balance of the house, all in kWh per year
     hw = ber.hwb_result
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Floor Area", f"{hw.floor_area:.0f} m\u00b2")
-    m2.metric("Heated Volume", f"{hw.heated_volume:.0f} m\u00b3")
-    m3.metric("Final Energy", f"{hw.final_energy_kwh_per_m2:.1f} kWh/m\u00b2/yr")
-    m4.metric("Hot Water", f"{hw.hot_water_kwh:.0f} kWh/yr")
+    st.markdown("**Energy balance over a year (kWh/yr)**")
+    if hw.transmission_loss_kwh or hw.ventilation_loss_kwh:
+        heating_label = HEATING_LABELS.get(
+            ber.building_input.heating_system.value, ber.building_input.heating_system.value
+        )
+        st.plotly_chart(
+            make_house_energy_diagram(hw, heating_label),
+            use_container_width=True,
+            key=f"house_{key_suffix}",
+            config={"displayModeBar": False},
+        )
+        st.caption(balance_line(hw))
+    else:
+        st.caption("Recalculate this result to see its energy balance.")
 
-    # BER gauge
-    st.plotly_chart(
-        _make_ber_gauge(ber.ber_band, ber.kwh_per_m2),
-        use_container_width=True,
-        key=f"gauge_{key_suffix}",
-    )
+    # Key metrics: HWB per m² and as a yearly total
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Floor Area", f"{hw.floor_area:.0f} m\u00b2",
+              help="Gross floor area: length \u00d7 width \u00d7 heated storeys.")
+    m2.metric("HWB (heating demand per m\u00b2)", f"{hw.hwb:.1f} kWh/m\u00b2/yr",
+              help="Heizw\u00e4rmebedarf: heat the home needs per m\u00b2 of floor area.")
+    m2.caption(f"= {hw.heating_demand_kwh:,.0f} kWh/yr for {hw.floor_area:.0f} m\u00b2")
+    m3.metric("Delivered Energy", f"{hw.total_kwh_per_m2:.1f} kWh/m\u00b2/yr",
+              help="Fuel or electricity bought for heating and hot water, per m\u00b2.")
+    m4.metric("Hot Water", f"{hw.hot_water_kwh:,.0f} kWh/yr")
+
+    with st.expander("How these numbers are calculated"):
+        _render_formulas(ber)
+    with st.expander("Calculation inputs: what was used and where it comes from",
+                     expanded=key_suffix == "main"):
+        _render_calculation_inputs(ber.building_input, sources)
 
     # --- Retrofit comparison ---
     if ber.retrofit_ber_band:
@@ -692,7 +810,10 @@ def _generate_pathway_scenarios(original: BERResult) -> list[dict]:
     scenario1_ber = _make_ber(ber1.retrofit_kwh_per_m2, ber1.retrofit_hwb_result, b)
 
     # Scenario 2 — Heat pump only (keep existing fabric)
-    hp_building = BuildingInput(**{**b.model_dump(), "heating_system": hp_system})
+    hp_data = {**b.model_dump(), "heating_system": hp_system}
+    if hp_data.get("overrides"):  # an efficiency the user set belongs to the old system
+        hp_data["overrides"]["heating_efficiency"] = None
+    hp_building = BuildingInput(**hp_data)
     ber2 = calc.calculate_ber(hp_building)
     scenario2_ber = _make_ber(ber2.kwh_per_m2, ber2.hwb_result, hp_building)
 
@@ -830,8 +951,8 @@ def _render_whatif_panel(original: BERResult) -> None:
             )
             b = original.building_input
 
-            wi_geom, wi_class, wi_heat, wi_retro = st.tabs(
-                ["Geometry", "Classification", "Heating", "Retrofit"]
+            wi_geom, wi_class, wi_heat, wi_assume, wi_retro = st.tabs(
+                ["Geometry", "Classification", "Heating", "Assumptions", "Retrofit"]
             )
 
             with wi_geom:
@@ -903,6 +1024,21 @@ def _render_whatif_panel(original: BERResult) -> None:
                         key="wi_hw_elec",
                     )
 
+            # The edited home's era, type and heating decide which presets apply
+            wi_base = b.model_copy(update={
+                "construction_epoch": ConstructionEpoch(wi_epoch),
+                "building_type": BuildingType(wi_btype),
+                "heating_system": HeatingSystem(wi_heating),
+                "overrides": None,
+            })
+            same_class = (wi_base.construction_epoch, wi_base.building_type, wi_base.heating_system) == (
+                b.construction_epoch, b.building_type, b.heating_system)
+            with wi_assume:
+                wi_overrides = _assumption_inputs(
+                    wi_base, "wi_assume", start=b.overrides if same_class else None,
+                )
+            wi_current = wi_base.model_copy(update={"overrides": wi_overrides})
+
             with wi_retro:
                 st.markdown("Apply retrofit measures on top of the edited configuration above.")
                 wi_show_retro = st.checkbox("Enable retrofit comparison", key="wi_show_retro")
@@ -915,9 +1051,12 @@ def _render_whatif_panel(original: BERResult) -> None:
                         wi_roof_ins = st.slider(
                             "Roof insulation (cm)", 0, 40, 20, key="wi_roof_ins",
                         )
+                        cur_win_u = round(resolve_presets(wi_current)["u_window"], 2)
+                        st.caption(_window_u_caption(wi_current))
                         wi_win_u = st.slider(
-                            "Window U-value (W/m\u00b2K)", 0.5, 3.0, 1.0,
-                            step=0.1, key="wi_win_u",
+                            "Window U-value after retrofit (W/m\u00b2K)", 0.5,
+                            max(3.0, cur_win_u), cur_win_u, step=0.05,
+                            key=f"wi_win_u_{cur_win_u}",
                         )
                     with wr2:
                         wi_heat_after = st.selectbox(
@@ -945,6 +1084,7 @@ def _render_whatif_panel(original: BERResult) -> None:
                     heating_system=HeatingSystem(wi_heating),
                     hot_water_electric_separate=wi_hw_elec,
                     residents=wi_residents if wi_residents > 0 else None,
+                    overrides=wi_overrides,
                 )
                 wi_retrofit = None
                 if wi_show_retro:
@@ -1380,7 +1520,7 @@ if mode == "Full Pipeline":
         # --- BER result ---
         if pr.ber_result:
             with st.container(border=True):
-                _display_ber(pr.ber_result)
+                _display_ber(pr.ber_result, sources=_pipeline_sources(pr))
             _render_whatif_panel(pr.ber_result)
 
     elif not (st.session_state.get("pipeline_result")):
@@ -1426,8 +1566,8 @@ else:
     st.markdown("<div class='section-header'><h3>Building Details</h3></div>",
                 unsafe_allow_html=True)
 
-    tab_geom, tab_class, tab_heat, tab_retro = st.tabs(
-        ["Geometry", "Classification", "Heating", "Retrofit"]
+    tab_geom, tab_class, tab_heat, tab_assume, tab_retro = st.tabs(
+        ["Geometry", "Classification", "Heating", "Assumptions", "Retrofit"]
     )
 
     with tab_geom:
@@ -1500,6 +1640,16 @@ else:
                      "immersion rather than the main heating system.",
             )
 
+    manual_base = BuildingInput(
+        length=length, width=width,
+        building_type=BuildingType(building_type),
+        construction_epoch=ConstructionEpoch(epoch),
+        heating_system=HeatingSystem(heating),
+    )
+    with tab_assume:
+        manual_overrides = _assumption_inputs(manual_base, "manual_assume")
+    manual_current = manual_base.model_copy(update={"overrides": manual_overrides})
+
     with tab_retro:
         st.markdown("Configure retrofit measures to compare before/after ratings.")
         show_retrofit = st.checkbox("Enable retrofit comparison")
@@ -1514,8 +1664,11 @@ else:
                     "Roof insulation (cm)", 0, 40, 20,
                     help="Additional roof/attic insulation thickness in cm.",
                 )
+                cur_u = round(resolve_presets(manual_current)["u_window"], 2)
+                st.caption(_window_u_caption(manual_current))
                 win_u = st.slider(
-                    "Window U-value (W/m\u00b2K)", 0.5, 3.0, 1.0, step=0.1,
+                    "Window U-value after retrofit (W/m\u00b2K)", 0.5, max(3.0, cur_u), cur_u,
+                    step=0.05, key=f"manual_win_u_{cur_u}",
                     help="Replacement window U-value. Lower = better insulated. "
                          "Triple glazing \u2248 0.8, double \u2248 1.4.",
                 )
@@ -1545,6 +1698,7 @@ else:
             heating_system=HeatingSystem(heating),
             hot_water_electric_separate=hw_electric,
             residents=residents if residents > 0 else None,
+            overrides=manual_overrides,
         )
 
         retrofit = None

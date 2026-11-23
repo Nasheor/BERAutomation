@@ -88,6 +88,31 @@ def _pef(system: HeatingSystem, country: Country) -> float:
     return PRIMARY_ENERGY_FACTOR[system]
 
 
+def resolve_presets(building: BuildingInput) -> dict[str, float]:
+    """Values the calculation uses for *building*: the presets, with the user's overrides on top.
+
+    Keys match :class:`CalculationOverrides`. ``window_share`` is only used when the
+    building has no measured window areas.
+    """
+    u = U_VALUES[building.construction_epoch]
+    presets = {
+        "u_wall": u["AW"],
+        "u_roof": u["OD"],
+        "u_floor": u["KD"],
+        "u_window": u["FE"],
+        "g_value": G_VALUES[building.construction_epoch],
+        "window_share": WINDOW_AREA_FRACTION[building.building_type],
+        "air_change_rate": AIR_CHANGE_RATE,
+        "internal_gain_w_m2": INTERNAL_GAIN_RATE,
+        "heating_efficiency": HEATING_SYSTEM_EFFICIENCY[building.heating_system],
+    }
+    if building.overrides is not None:
+        for key, value in building.overrides.model_dump().items():
+            if value is not None:
+                presets[key] = value
+    return presets
+
+
 class HWBCalculator:
     """Calculate HWB (annual heating demand) following the Excel tool logic exactly."""
 
@@ -95,9 +120,7 @@ class HWBCalculator:
 
     def calculate(self, building: BuildingInput) -> HWBResult:
         """Run the full HWB calculation for *building*."""
-        u = U_VALUES[building.construction_epoch]
-        g = G_VALUES[building.construction_epoch]
-        return self._calculate_core(building, u, g)
+        return self._calculate_core(building, resolve_presets(building))
 
     def calculate_ber(
         self,
@@ -140,38 +163,34 @@ class HWBCalculator:
     def calculate_with_retrofit_uvalues(
         self, building: BuildingInput, retrofit: RetrofitInput
     ) -> HWBResult:
-        """Calculate HWB with explicit retrofit U-value overrides."""
-        original_u = U_VALUES[building.construction_epoch].copy()
+        """Calculate HWB after the retrofit, starting from the U-values in use (presets or overrides)."""
+        retrofit_building = self._apply_retrofit(building, retrofit)
+        p = resolve_presets(retrofit_building)
 
         # Wall: add insulation layer (R_new = R_old + thickness/conductivity)
         if retrofit.wall_insulation_cm > 0:
             r_added = (retrofit.wall_insulation_cm / 100.0) / INSULATION_CONDUCTIVITY
-            r_original = 1.0 / original_u["AW"]
-            original_u["AW"] = 1.0 / (r_original + r_added)
+            p["u_wall"] = 1.0 / (1.0 / p["u_wall"] + r_added)
 
         # Roof: add insulation layer
         if retrofit.roof_insulation_cm > 0:
             r_added = (retrofit.roof_insulation_cm / 100.0) / INSULATION_CONDUCTIVITY
-            r_original = 1.0 / original_u["OD"]
-            original_u["OD"] = 1.0 / (r_original + r_added)
+            p["u_roof"] = 1.0 / (1.0 / p["u_roof"] + r_added)
 
         # Windows: replace with specified U-value
         if retrofit.window_u_value > 0:
-            original_u["FE"] = retrofit.window_u_value
+            p["u_window"] = retrofit.window_u_value
 
-        retrofit_building = self._apply_retrofit(building, retrofit)
-        g = G_VALUES[building.construction_epoch]
-        return self._calculate_core(retrofit_building, original_u, g)
+        return self._calculate_core(retrofit_building, p)
 
     # --- core calculation (mirrors Excel Calculations sheet exactly) ---
 
     def _calculate_core(
         self,
         building: BuildingInput,
-        u: dict[str, float],
-        g: float,
+        p: dict[str, float],
     ) -> HWBResult:
-        """Core HWB calculation with explicit U-values and g-value."""
+        """Core HWB calculation with the values in *p* (see :func:`resolve_presets`)."""
         b = building
 
         # --- Geometry (Excel Calculations C2-P2) ---
@@ -193,7 +212,7 @@ class HWBCalculator:
         adjacent_walls = self._adjacent_wall_area(b)
 
         # F2: window/door total area
-        win_door_total = self._window_door_total(b, envelope_area)
+        win_door_total = self._window_door_total(b, envelope_area, p["window_share"])
 
         # M2: total walls = envelope - windows
         total_walls = envelope_area - win_door_total
@@ -235,10 +254,10 @@ class HWBCalculator:
         # f_win = 1, f_roof = 1, f_floor = 0.7, f_wall = 1
         a_win = win_door_total
         l_e = (
-            u["FE"] * a_win * 1.0           # AH2*AI2*AJ2
-            + u["OD"] * roof_area * 1.0      # AK2*AL2*AM2
-            + u["KD"] * floor_area * FLOOR_U_FACTOR  # AN2*AO2*AP2
-            + u["AW"] * external_walls * 1.0  # AQ2*AR2*AS2
+            p["u_window"] * a_win * 1.0           # AH2*AI2*AJ2
+            + p["u_roof"] * roof_area * 1.0      # AK2*AL2*AM2
+            + p["u_floor"] * floor_area * FLOOR_U_FACTOR  # AN2*AO2*AP2
+            + p["u_wall"] * external_walls * 1.0  # AQ2*AR2*AS2
         )
 
         # AU2: thermal bridge supplement
@@ -260,7 +279,7 @@ class HWBCalculator:
         # --- Ventilation Heat Loss (Excel BA2-BC2) ---
         # BA2 = P2 (volume)
         # BB2 = 0.34 * 0.4 * BA2
-        l_v = AIR_HEAT_CAPACITY * AIR_CHANGE_RATE * volume
+        l_v = AIR_HEAT_CAPACITY * p["air_change_rate"] * volume
 
         # BC2 = 0.024 * BB2 * AE2
         q_v = HDD_TO_KWH_FACTOR * l_v * hdd
@@ -268,11 +287,11 @@ class HWBCalculator:
         # --- Internal Gains (Excel BG2) ---
         # BG2 = 0.024 * 3.75 * D2 * AF2
         heating_days = HEATING_DAYS[b.country]
-        q_i = HDD_TO_KWH_FACTOR * INTERNAL_GAIN_RATE * net_area * heating_days
+        q_i = HDD_TO_KWH_FACTOR * p["internal_gain_w_m2"] * net_area * heating_days
 
         # --- Solar Gains (Excel BU2) ---
         # BT2 = W2 * 0.9 * 0.98  (g_effective)
-        g_eff = g * FRAME_FACTOR * DIRT_FACTOR
+        g_eff = p["g_value"] * FRAME_FACTOR * DIRT_FACTOR
 
         # BU2 = (Irr_N*A_N + Irr_E*A_E + Irr_S*A_S + Irr_W*A_W) * F_s * g_eff
         irr = SOLAR_IRRADIANCE[b.country]
@@ -306,7 +325,7 @@ class HWBCalculator:
         )
 
         # --- Final Energy ---
-        eff = HEATING_SYSTEM_EFFICIENCY[b.heating_system]
+        eff = p["heating_efficiency"]
 
         # Hot water system: if electric & separate, use electric efficiency
         if b.hot_water_electric_separate:
@@ -343,6 +362,21 @@ class HWBCalculator:
             total_kwh_per_m2=total_kwh_per_m2,
             co2_kg=co2_total,
             co2_kg_per_m2=co2_total / gross_area if gross_area > 0 else 0.0,
+            transmission_loss_kwh=q_t,
+            ventilation_loss_kwh=q_v,
+            hot_water_final_kwh=final_hotwater,
+            net_area=net_area,
+            window_area=a_win,
+            roof_area=roof_area,
+            ground_floor_area=floor_area,
+            external_wall_area=external_walls,
+            party_wall_area=adjacent_walls,
+            basic_transmission_w_k=l_e,
+            thermal_bridge_w_k=l_psi,
+            hdd=hdd,
+            heating_days=heating_days,
+            residents=residents,
+            presets=dict(p),
         )
 
     # --- private helpers ---
@@ -369,17 +403,16 @@ class HWBCalculator:
         else:  # DETACHED
             return 0.0
 
-    def _window_door_total(self, b: BuildingInput, envelope_area: float) -> float:
+    def _window_door_total(self, b: BuildingInput, envelope_area: float, share: float) -> float:
         """Calculate total window/door area (F2 / Input!J2).
 
-        J2 = envelope_area * fraction (0.15/0.14/0.13 by building type)
+        J2 = envelope_area * share (preset 0.15/0.14/0.13 by building type)
         """
         if b.window_door_areas is not None:
             wd = b.window_door_areas
             return wd.north + wd.east + wd.south + wd.west + wd.doors
 
-        frac = WINDOW_AREA_FRACTION[b.building_type]
-        return envelope_area * frac
+        return envelope_area * share
 
     def _window_door_by_orientation(
         self, b: BuildingInput, total: float
@@ -405,7 +438,10 @@ class HWBCalculator:
     ) -> BuildingInput:
         """Create a modified BuildingInput reflecting retrofit heating system changes."""
         data = b.model_dump()
-        if r.heating_system_after is not None:
+        if r.heating_system_after is not None and r.heating_system_after != b.heating_system:
             data["heating_system"] = r.heating_system_after
+            # An efficiency the user set belongs to the old system
+            if data.get("overrides") and data["overrides"].get("heating_efficiency") is not None:
+                data["overrides"]["heating_efficiency"] = None
         data["hot_water_electric_separate"] = r.hot_water_electric_separate_after
         return BuildingInput(**data)

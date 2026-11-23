@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from ber_automation.ber_engine.calculator import HWBCalculator
+from ber_automation.ber_engine.calculator import HWBCalculator, resolve_presets
 from ber_automation.ber_engine.rating import get_ber_band
 from ber_automation.models import (
     BuildingInput,
     BuildingType,
+    CalculationOverrides,
     ConstructionEpoch,
     Country,
     HeatingSystem,
+    HWBResult,
     RetrofitInput,
 )
 
@@ -156,3 +158,84 @@ class TestHWBCalculator:
         result = self.calc.calculate(typical_irish_house)
         assert result.co2_kg > 0
         assert result.co2_kg_per_m2 > 0
+
+
+class TestPresetsAndOverrides:
+    """Presets the user replaces (CalculationOverrides) and the annual energy balance."""
+
+    calc = HWBCalculator()
+
+    def _with(self, house: BuildingInput, **values) -> BuildingInput:
+        return house.model_copy(update={"overrides": CalculationOverrides(**values)})
+
+    def test_presets_come_from_era_type_and_heating(self, typical_irish_house):
+        p = resolve_presets(typical_irish_house)
+        assert p["u_window"] == 3.0 and p["u_wall"] == 1.2  # before 1980
+        assert p["window_share"] == 0.15                     # detached
+        assert p["heating_efficiency"] == 0.85               # oil boiler
+        assert p["air_change_rate"] == 0.4 and p["internal_gain_w_m2"] == 3.75
+
+    def test_empty_overrides_change_nothing(self, typical_irish_house):
+        plain = self.calc.calculate_ber(typical_irish_house)
+        empty = self.calc.calculate_ber(self._with(typical_irish_house))
+        assert empty.kwh_per_m2 == plain.kwh_per_m2
+        assert empty.hwb_result.hwb == plain.hwb_result.hwb
+
+    @pytest.mark.parametrize("field, value, direction", [
+        ("u_window", 1.2, -1),
+        ("u_wall", 0.3, -1),
+        ("u_roof", 0.15, -1),
+        ("u_floor", 0.3, -1),
+        ("g_value", 0.9, -1),
+        ("air_change_rate", 1.0, +1),
+        ("internal_gain_w_m2", 6.0, -1),
+    ])
+    def test_override_moves_heating_demand(self, typical_irish_house, field, value, direction):
+        base = self.calc.calculate(typical_irish_house).heating_demand_kwh
+        changed = self.calc.calculate(self._with(typical_irish_house, **{field: value})).heating_demand_kwh
+        assert (changed - base) * direction > 0
+
+    def test_window_share_sets_window_area(self, typical_irish_house):
+        # More glass loses more heat but also lets in more sun, so only the area is certain
+        base = self.calc.calculate(typical_irish_house)
+        more = self.calc.calculate(self._with(typical_irish_house, window_share=0.30))
+        assert more.window_area == pytest.approx(base.window_area * 2)
+        assert more.solar_gains == pytest.approx(base.solar_gains * 2)
+
+    def test_efficiency_override_changes_delivered_not_demand(self, typical_irish_house):
+        base = self.calc.calculate(typical_irish_house)
+        better = self.calc.calculate(self._with(typical_irish_house, heating_efficiency=0.95))
+        assert better.heating_demand_kwh == pytest.approx(base.heating_demand_kwh)
+        assert better.final_energy_kwh < base.final_energy_kwh
+
+    def test_retrofit_insulates_the_overridden_wall(self, typical_irish_house):
+        retrofit = RetrofitInput(wall_insulation_cm=10, roof_insulation_cm=0, window_u_value=3.0)
+        preset = self.calc.calculate_with_retrofit_uvalues(typical_irish_house, retrofit)
+        good_wall = self._with(typical_irish_house, u_wall=0.3)
+        better = self.calc.calculate_with_retrofit_uvalues(good_wall, retrofit)
+        assert better.presets["u_wall"] == pytest.approx(1 / (1 / 0.3 + 0.1 / 0.035))
+        assert preset.presets["u_wall"] == pytest.approx(1 / (1 / 1.2 + 0.1 / 0.035))
+        assert better.heating_demand_kwh < preset.heating_demand_kwh
+
+    def test_new_heating_system_drops_old_efficiency(self, typical_irish_house):
+        house = self._with(typical_irish_house, heating_efficiency=0.6, u_window=2.0)
+        retrofit = RetrofitInput(wall_insulation_cm=0, roof_insulation_cm=0, window_u_value=2.0,
+                                 heating_system_after=HeatingSystem.HEAT_PUMP_AIR)
+        after = self.calc.calculate_with_retrofit_uvalues(house, retrofit)
+        assert after.presets["heating_efficiency"] == 3.5
+        assert after.presets["u_window"] == 2.0
+
+    def test_energy_balance_closes(self, typical_irish_house, modern_semi_d):
+        for house in (typical_irish_house, modern_semi_d):
+            hw = self.calc.calculate(house)
+            losses_less_gains = (hw.transmission_loss_kwh + hw.ventilation_loss_kwh
+                                 - hw.internal_gains - hw.solar_gains)
+            assert hw.heating_demand_kwh == pytest.approx(max(0.0, losses_less_gains))
+            assert hw.hwb * hw.floor_area == pytest.approx(hw.heating_demand_kwh)
+            assert hw.transmission_loss_kwh == pytest.approx(0.024 * hw.transmission_heat_loss * hw.hdd)
+
+    def test_old_saved_results_still_load(self, typical_irish_house):
+        data = self.calc.calculate(typical_irish_house).model_dump()
+        for key in ("transmission_loss_kwh", "ventilation_loss_kwh", "presets", "hdd"):
+            data.pop(key)
+        assert HWBResult(**data).transmission_loss_kwh == 0.0

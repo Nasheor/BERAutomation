@@ -531,19 +531,25 @@ class BERPipeline:
             if 20 <= area <= 500:
                 params["length"] = length
                 params["width"] = width
+                result.dimensions_source = "satellite"
             else:
                 params["length"] = 10.0
                 params["width"] = 8.0
+                result.dimensions_source = "default"
         else:
             # Fallback defaults for a typical Irish house
             params["length"] = 10.0
             params["width"] = 8.0
+            result.dimensions_source = "default"
 
         # Classification from Claude analysis (require confidence >= 0.4)
         if result.street_analysis and result.street_analysis.confidence >= 0.4:
             sa = result.street_analysis
             params["building_type"] = sa.building_type
             params["heated_storeys"] = sa.estimated_storeys
+            result.type_source = "streetview"
+        else:
+            result.type_source = "default"
 
         # Era: census prior for the location combined with the Street View reading
         census = result.census
@@ -565,5 +571,9 @@ class BERPipeline:
                 result.epoch_source = "override"
             if "heating_system" in overrides:
                 result.heating_source = "override"
+            if "length" in overrides or "width" in overrides:
+                result.dimensions_source = "override"
+            if "building_type" in overrides or "heated_storeys" in overrides:
+                result.type_source = "override"
 
         return BuildingInput(**params)
