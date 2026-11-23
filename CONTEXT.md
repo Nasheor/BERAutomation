@@ -424,8 +424,8 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
 ## Official-BER Sample for the Paper (`data/validation/official/`, Nov 2026)
 
 - `sample.csv`: one row per home, filled in by hand from property listings and checked
-  against SEAI's register (no scraping). 20 homes on 2026-11-17 (Cork 7, Dublin 7, Kerry 2,
-  Kildare, Meath, Offaly, Waterford; 12 urban, 8 rural; bands A2 to D2, none E to G yet).
+  against SEAI's register (no scraping). 21 homes on 2026-11-23 (Cork 7, Dublin 8, Kerry 2,
+  Kildare, Meath, Offaly, Waterford; 13 urban, 8 rural; bands A2 to D2, none E to G yet).
   Columns and
   the collection steps are in the `README.md` next to it. Required: `id`, `eircode`,
   `county`, `settlement` (urban/rural), `listing_source`, `date_recorded`, `ber_number`
@@ -452,9 +452,9 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   be copied again ("type" to type the values). The clipboard is read with tkinter
   (`read_clipboard`); `run(..., clipboard=...)` takes any function, which is how the tests
   drive it. Clipboard mode does not ask for storeys, heating or notes; `--type` gives the
-  old mode that asks for every value. **The parsers are tested only on invented page text
-  (2026-11-18); not yet tried on a real daft.ie or register page.** If a real page is
-  missed, get the copied text from the user and adjust the patterns.
+  old mode that asks for every value. **First real use (2026-11-23, home 21, D13 DC65):** every
+  value was read from the copied daft.ie and register pages, nothing had to be typed. If a
+  later page is missed, get the copied text from the user and adjust the patterns.
   Each answer is checked as typed (Eircode, 9-digit BER
   number, duplicates, band vs kWh, houses only); a row is saved only when `check_row`
   passes, with the next id, today's date and `register_checked=yes`. Register text can be
@@ -772,14 +772,11 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
   baseline, HWB-versus-DEAP error separated from perception error), and target venues with
   dates (SBE27 Delft abstract due 18 Dec 2026).
 - The official-BER sample format and its checker exist (see *Official-BER Sample for the
-  Paper*); the sample is being collected: 20 of about 250 homes on 2026-11-17, none in
+  Paper*); the sample is being collected: 21 of about 250 homes on 2026-11-23, none in
   bands E to G yet.
-- **Resume here (2026-11-18):** the clipboard mode of `scripts/add_official_home.py` is
-  committed on branch `official-validation` but untried on real pages. First step: the
-  user adds one home against a scratch copy of the sample
-  (`python scripts/add_official_home.py <copy.csv>`); fix `parse_listing_text` /
-  `parse_register_text` from the copied text if values are missed, then continue
-  collecting.
+- **Resume here (2026-11-23):** clipboard mode of `scripts/add_official_home.py` works on
+  real pages (home 21). Next: the full `scripts/validate_official.py --runs 3` run on the
+  21 homes, while collecting continues (homes in bands E to G especially).
 - Next for the paper: a valid Mistral key and the two-model comparison on the 5 Cork
   homes; the first 10 to 20 sample rows, to learn what the register provides;
   census-only and images-only switches (`scripts/validate_official.py` exists; see
