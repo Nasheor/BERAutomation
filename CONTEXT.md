@@ -493,6 +493,26 @@ The pipeline uses a two-tier approach to extract building dimensions from satell
   (certificate 137 m², +17%; 10 × 8 m is the OpenCV default). With the certificate's era and area
   (b) gives A3 71 (−60%): the calculator's 2000–2010 era is far more efficient than DEAP rated
   this house. One home only; the full run is still to do.
+- **First full run (2026-11-23, 21 homes, Claude Sonnet 5.5, 3 runs each, n = 63;**
+  `output/official_validation/report_claude_21homes_2026-11-23.json`, ~1 h):
+
+  | | band exact | within one | mean band offset | kWh error, mean abs / median |
+  |---|---|---|---|---|
+  | baseline (commonest band, leave-one-out) | 0/21 | 4/21 | +1.14 | 153% / +20% |
+  | (b) calculator on certificate era, area, type | 18/63 | 30/63 | −1.90 | 32% / −24% |
+  | (c) pipeline | 11/63 | 19/63 | −1.35 | 55% / −29% |
+
+  (a) inputs: dwelling type 45/63, era 38/63 (census for 59 runs), floor area mean |error| 80%,
+  median +31%; 17 of 63 runs fell back to the 10 × 8 m footprint. Run agreement 94%.
+  By certificate year (median kWh error, (c) / (b)): before 2000 −34% / −28% and −3.0 bands
+  on average; 2000–2010 −50% / −57%; after 2010 +18% / +7%. **The calculator rates older homes
+  as far more efficient than DEAP**, even with the certificate's own era and area ((b)), so most
+  of the error is the HWB-versus-DEAP gap, not image reading. New homes come out close.
+  **The baseline is degenerate here:** A3 and C3 each hold 5 of 21 homes, so leaving one out always
+  tips the commonest band to the other one (ties go towards C1), giving 0 exact. A median-kWh
+  baseline or the census-only switch would be a fairer reference.
+  Failures: "Footprint extraction found no building contour" (X91 A3V9 1 run, V92 NFR9, V93 C7N8
+  all runs), no Street View for one run each of P17 HW84, P43 K277, K78 A9T4.
 - Not built yet: census-only / images-only switches (the remaining baselines).
 
 ## Daft Validation (`scripts/validate_daft.py`)
