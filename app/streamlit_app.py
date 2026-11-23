@@ -39,6 +39,7 @@ def _load_secrets_into_env() -> None:
 
 _load_secrets_into_env()
 
+from app.community_page import render_community_page
 from app.energy_diagram import balance_line, make_house_energy_diagram
 from ber_automation.ber_engine.calculator import HWBCalculator, resolve_presets
 from ber_automation.ber_engine.constants import BER_BANDS
@@ -247,11 +248,12 @@ with st.sidebar:
     st.caption("v1.0")
     mode = st.radio(
         "Mode",
-        ["Full Pipeline", "Manual Input"],
+        ["Full Pipeline", "Manual Input", "Community"],
         index=1,
         help="**Full Pipeline** geocodes an address, fetches imagery, "
              "runs AI analysis, and calculates the BER automatically. "
-             "**Manual Input** lets you enter building details directly.",
+             "**Manual Input** lets you enter building details directly. "
+             "**Community** rates every home on an address list.",
     )
     st.divider()
     with st.expander("About this tool"):
@@ -1562,7 +1564,7 @@ if mode == "Full Pipeline":
 # ===================================================================
 # MODE 2: Manual Input
 # ===================================================================
-else:
+elif mode == "Manual Input":
     st.markdown("<div class='section-header'><h3>Building Details</h3></div>",
                 unsafe_allow_html=True)
 
@@ -1724,3 +1726,23 @@ else:
             "Configure your building details in the tabs above and press "
             "**Calculate BER** to see the energy rating."
         )
+
+
+# ===================================================================
+# MODE 3: Community (many homes from an address list)
+# ===================================================================
+else:
+    _providers = available_providers(get_settings())
+    community_provider = _providers[0] if _providers else None
+    if len(_providers) > 1:
+        community_provider = st.radio(
+            "AI model for image analysis", _providers,
+            format_func=lambda p: PROVIDER_LABELS.get(p, p), horizontal=True,
+            key="community_provider",
+        )
+    render_community_page(
+        run_async=_run_async,
+        show_home=lambda ber, key: _display_ber(ber, key_suffix=key),
+        labels={"era": EPOCH_LABELS, "heating": HEATING_LABELS, "type": BUILDING_TYPE_LABELS},
+        provider=community_provider,
+    )

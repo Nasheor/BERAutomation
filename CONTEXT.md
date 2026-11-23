@@ -819,6 +819,49 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
 - **Server files:** images and overlays are written to `output/` on the app's disk, which is
   temporary and shared by everyone using the app.
 
+## Community Assessment (`ber_automation/community/`, Phase 1, 2026-11-24)
+
+CIRCUS works with communities; the tool rated one address at a time. Plan (approved
+2026-11-24): Phase 1 core (this), Phase 2 programme scenarios and energy schemes (grouped
+retrofit, heat density, roof PV with a panel cap), Phase 3 area-level validation against SEAI's
+public BER data. Input is an address list; Ireland first (census).
+
+- **Census stock model** (`stock.py`): per Small Area, every era × fuel × room-count
+  combination is a typical home rated by the calculator, weighted by the product of the census
+  shares and scaled by the households. Assumptions: the three are independent (the census does
+  not cross them); semi-detached in CSO urban areas, detached in rural; rooms × 20 m²,
+  one storey under 70 m², footprint 1.25 : 1; coal, peat, LPG, other and none are not modelled
+  and those homes are assumed like the rest (`modelled_share`, about 80 % in rural areas);
+  electricity after 2010 = heat pump. About 2–3 ms per Small Area (all 18,919 in about a
+  minute). `census_home_estimate(area)` is the most likely single home: era and heating from
+  `choose_epoch` / `choose_heating` with no images, the commonest room count.
+- **Dwelling type** comes from the urban flag for now. The census "type of accommodation" table
+  is not in `data/` yet: adding it to `build_census_data.py` needs a download from the CSO API
+  (to confirm with the user, with the table code).
+- `assess.py`: `assess_community(entries, name, analyse="none"|"all"|N|ids)`: geocode and census
+  lookup for every address (5 at a time), census estimate, then the full pipeline for the chosen
+  homes (3 at a time, one run each; a sample of N is spread round-robin over the Small Areas).
+  Saved to `output/communities/<name>/community.json` after each home; a rerun reuses located
+  homes and image results, so it resumes without paying twice. One home failing is recorded in
+  its `errors` and does not stop the rest. `summary.py`: ranking (worst primary kWh/m² first),
+  band counts, totals for the listed homes and for their whole Small Areas, census-versus-image
+  agreement. `addresses.py` reads a CSV (address / eircode / postcode column, optional id) or a
+  plain list.
+- `python scripts/assess_community.py <csv> --name X [--analyse none|all|N|ids] [--provider]`.
+- **App:** sidebar mode "Community" (`app/community_page.py`): upload or paste a list → "Quick
+  census estimate"; open a saved community; tiles (homes rated, heat demand, primary energy, CO2,
+  average), the Small Areas' census totals, band charts (listed homes and all homes in the areas),
+  a map coloured by band (Plotly `Scattermap`, MapLibre, no token; zoom fitted to the homes), the
+  ranked table with CSV and JSON downloads, problems, "Analyse with images" (sample / chosen / all,
+  capped at 25 homes in the app; more through the CLI) and one home in the single-home view.
+  Checked with `AppTest`; the map tiles could not be rendered headlessly, the zoom is unit-tested.
+- **First run, census only, the 21 official-sample homes (2026-11-24):** all located, 21 Small
+  Areas with 2,226 households; listed homes 220 MWh/yr heat demand, 321 MWh/yr primary, 65 t
+  CO2/yr; the areas 20,203 MWh/yr heat demand, 6,039 t CO2/yr. Against the certificates: band
+  exact 4/21, within one 7/21, mean offset −1.6 bands, median kWh error −33 %; the community's
+  primary-energy total is 40 % under the certificates' (321 versus 538 MWh/yr): the same
+  older-homes gap as the pipeline (see the 21-home run above).
+
 ## Planned Work
 
 - **Mistral as a second, user-selectable vision model, and the paper** (AI estimate versus
