@@ -551,6 +551,9 @@ as a house with gains, heating and hot water in kWh/yr").
   baseline or the census-only switch would be a fairer reference.
   Failures: "Footprint extraction found no building contour" (X91 A3V9 1 run, V92 NFR9, V93 C7N8
   all runs), no Street View for one run each of P17 HW84, P43 K277, K78 A9T4.
+  The background process ended with exit code −1 *after* printing the summary and writing the
+  report (Windows event-loop teardown); the results are complete. About 1 minute per pipeline run
+  (63 runs in about 62 minutes).
 - Not built yet: census-only / images-only switches (the remaining baselines).
 
 ## Daft Validation (`scripts/validate_daft.py`)
@@ -757,7 +760,7 @@ coordinate are the same, so the inputs match.
   (see *Vision Model Providers*); compared with an assessor, not official BERs.
 
 ### Test Coverage
-- 230 tests total (`tests/test_calculator.py` presets and overrides: presets by era/type/heating, empty overrides change nothing, each override moves the demand the right way, retrofit on overridden U, efficiency dropped with a new system, energy balance closes, old results load; `tests/test_calculation_inputs.py`: origins from pipeline sources, manual input, overrides, formulas with the home's numbers; `tests/test_energy_diagram.py`: every flow labelled in kWh/yr, balance line, no heating needed; `tests/test_official_compare.py`: band distance, score signs, inputs compared only when recorded, certificate values put in (area scaled, plan shape and shared side kept), leave-one-out baseline and its tie rule, summaries, run agreement; `tests/test_add_official_home.py`: register text parsed, row saved and passes the checker, re-ask on bad answers, duplicates refused, band/kWh mismatch not saved, ids continue; `tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
+- 246 tests total (`tests/test_community_stock.py`: weights cover every home, totals scale with households, old oil area worse than new gas area, unmodelled fuels reported, missing mixes fall back, typical home size/type, one-home estimate uses the pipeline rules; `tests/test_community_assess.py` (geocoder, census and pipeline mocked): census estimate per located home, image analysis for chosen homes with failures kept per home, rerun reuses saved results, sample spread over Small Areas, summaries, address list from CSV or plain text; `tests/test_community_page.py`: map zoom shows every home, one map trace per band, band chart order, ranking CSV; `tests/test_calculator.py` presets and overrides: presets by era/type/heating, empty overrides change nothing, each override moves the demand the right way, retrofit on overridden U, efficiency dropped with a new system, energy balance closes, old results load; `tests/test_calculation_inputs.py`: origins from pipeline sources, manual input, overrides, formulas with the home's numbers; `tests/test_energy_diagram.py`: every flow labelled in kWh/yr, balance line, no heating needed; `tests/test_official_compare.py`: band distance, score signs, inputs compared only when recorded, certificate values put in (area scaled, plan shape and shared side kept), leave-one-out baseline and its tie rule, summaries, run agreement; `tests/test_add_official_home.py`: register text parsed, row saved and passes the checker, re-ask on bad answers, duplicates refused, band/kWh mismatch not saved, ids continue; `tests/test_official_sample.py`: sample CSV read and normalised, band/kWh mismatch, unusable rows dropped, duplicates, empty template; `tests/test_llm_providers.py`: provider choice and fallback, Mistral request shape and part order, chunked replies, retry on 429, key missing, provider passed through the pipeline and recorded; `tests/test_similar_house.py`: similar house parsed, image number → heading index when a duplicate view was dropped, invalid replies ignored, classification passed as context and its prompt untouched, `uses_similar_house`, pipeline finds the image, `facade_hint` prompt, orange boxes drawn over cyan; `tests/test_census.py`: era prior + choose_epoch rules, choose_heating rules (gas threshold, observed clue, non-gas fuel, heat pump, urban fallback), choose_unit_count (room-mix count whatever Claude said, pairs kept, wrong split undone, Claude kept when seen/detached/no rooms, frontage limit, storeys), lookup with mocked service, data files, `_build_input` + overrides; `tests/test_detect_windows.py`: neighbour windows outside the facade dropped, blurred target, legacy list reply; `tests/test_streetview_fetch.py`: outdoor panorama + pano pinning, fallback, duplicate views dropped, stale files cleared)
 - `tests/test_satellite_analysis.py` covers:
   - `analyze_satellite()` — uploaded-image path (metres, clamping), GPS path (block corners split
     along the longer edge into the slice nearest the centre; missing corners → confidence 0;
@@ -818,6 +821,18 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
   `F:\Circus\BERAutomation`; starting Streamlit there used its old `.env` key and June code.)
 - **Server files:** images and overlays are written to `output/` on the app's disk, which is
   temporary and shared by everyone using the app.
+- **App modules:** since 2026-11-23 the app also imports `app.energy_diagram` (and, on the
+  `community` branch, `app.community_page`); this works because the repo root is put on
+  `sys.path` first (see *Imports*), with `app/` as a namespace package (no `__init__.py`).
+- **What is live (2026-11-24):** `daft-validation` at `f727e74` (pushed 2026-11-23): the
+  supervisor-feedback changes (*Calculation Inputs, Presets and the Energy Diagram*) plus the
+  official-BER work (validation script, clipboard mode, home 21, the 21-home run notes).
+- **Branches (2026-11-24):** `daft-validation` = `app-feedback` = `f727e74` (both pushed);
+  `official-validation` at `9c9fa30` (pushed; already merged into the two above);
+  `community` (from `daft-validation`, community Phase 1, pushed 2026-11-24, **not merged** into
+  `daft-validation`, so not live).
+  New work goes on a branch and is merged into `daft-validation` only when the user says so,
+  because every push there redeploys the supervisor's app.
 
 ## Community Assessment (`ber_automation/community/`, Phase 1, 2026-11-24)
 
@@ -854,7 +869,8 @@ public BER data. Input is an address list; Ireland first (census).
   a map coloured by band (Plotly `Scattermap`, MapLibre, no token; zoom fitted to the homes), the
   ranked table with CSV and JSON downloads, problems, "Analyse with images" (sample / chosen / all,
   capped at 25 homes in the app; more through the CLI) and one home in the single-home view.
-  Checked with `AppTest`; the map tiles could not be rendered headlessly, the zoom is unit-tested.
+  Checked with `AppTest`; the map tiles could not be rendered headlessly (zoom unit-tested), and
+  the user confirmed the map works in the local app on 2026-11-24.
 - **First run, census only, the 21 official-sample homes (2026-11-24):** all located, 21 Small
   Areas with 2,226 households; listed homes 220 MWh/yr heat demand, 321 MWh/yr primary, 65 t
   CO2/yr; the areas 20,203 MWh/yr heat demand, 6,039 t CO2/yr. Against the certificates: band
@@ -875,10 +891,36 @@ public BER data. Input is an address list; Ireland first (census).
 - The official-BER sample format and its checker exist (see *Official-BER Sample for the
   Paper*); the sample is being collected: 21 of about 250 homes on 2026-11-23, none in
   bands E to G yet.
-- **Resume here (2026-11-23):** clipboard mode of `scripts/add_official_home.py` works on
-  real pages (home 21). Next: the full `scripts/validate_official.py --runs 3` run on the
-  21 homes, while collecting continues (homes in bands E to G especially).
-- Next for the paper: a valid Mistral key and the two-model comparison on the 5 Cork
-  homes; the first 10 to 20 sample rows, to learn what the register provides;
-  census-only and images-only switches (`scripts/validate_official.py` exists; see
-  *Official-BER Sample for the Paper*).
+- **Session 2026-11-23/24 (summary):** home 21 added with clipboard mode (parsers work on
+  real daft.ie and register pages); first full official-BER run on 21 homes (see *Official-BER
+  Sample*: most of the error is the calculator rating older homes better than DEAP); the
+  supervisor's comments on the app done and live (see *Calculation Inputs, Presets and the
+  Energy Diagram*); community assessment Phase 1 built on branch `community` (see *Community
+  Assessment*).
+- **Supervisor's comments on the app (2026-11-23):** window U-values and their source, preset
+  values shown for the image data, what internal gains are, HWB units (HWB × floor area), a
+  house-style chart with notes on each metric: **done**. "The number of solar panels for each
+  house must be capped": **open**, the app has no PV; the user is asking the supervisor. Likely
+  meaning: rooftop PV capped by usable roof area, planned in community Phase 2.
+- **Resume here (2026-11-24):** community Phase 1 is on branch `community` (pushed, not merged);
+  the user ran it locally and the map works. Decisions pending from the user: (1) may the CSO Census 2022
+  "type of accommodation" Small Area table be downloaded (table code to confirm; it would
+  replace the urban/rural dwelling-type guess in the stock model); (2) a small live image run
+  (about 5 homes, about 5 minutes of API use) to check census-versus-image and resuming;
+  (3) go-ahead for Phase 2 (programme scenarios, grouped retrofit, heat density, rooftop PV with
+  a panel cap) and Phase 3 (SEAI public BER data at area level; the user downloads it).
+  Plan file: `C:/Users/nagar/.claude/plans/abundant-shimmying-rain-of-7975d1e2-787d-4a3c-8b09-e7bc02f85aad.md`.
+- Next for the paper: a fairer baseline than the leave-one-out commonest band (degenerate on
+  the 21 homes: A3 and C3 tie), such as the median kWh or the census-only estimate, which now
+  exists (`census_home_estimate`, 4/21 exact); an images-only switch; why the calculator rates
+  pre-2010 homes so much better than DEAP (HWB-versus-DEAP gap); keep collecting homes,
+  especially bands E to G; a valid Mistral key and the two-model comparison.
+- **Checking the app without a browser** (the Claude in Chrome extension was not connected on
+  2026-11-23/24): `streamlit.testing.v1.AppTest.from_file("app/streamlit_app.py")` drives the
+  real script (switch `at.sidebar.radio[0]` to a mode, set inputs, click buttons, read
+  `at.metric` / `at.markdown` / `at.dataframe`); a ready-made `PipelineResult` or a saved
+  community put into `at.session_state` avoids API calls. Plotly figures were checked as images
+  with `fig.write_html(...)` and headless Edge (`msedge --headless=new --screenshot=...
+  --virtual-time-budget=...`; add `--use-angle=swiftshader --enable-unsafe-swiftshader` for
+  WebGL). MapLibre map tiles did not render reliably that way, so the map zoom is unit-tested.
+  The driver scripts were kept in `output/dev/` (not in git).
