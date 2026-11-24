@@ -821,16 +821,19 @@ keys). It is deployed on Streamlit Community Cloud from the private repo.
   `F:\Circus\BERAutomation`; starting Streamlit there used its old `.env` key and June code.)
 - **Server files:** images and overlays are written to `output/` on the app's disk, which is
   temporary and shared by everyone using the app.
-- **App modules:** since 2026-11-23 the app also imports `app.energy_diagram` (and, on the
-  `community` branch, `app.community_page`); this works because the repo root is put on
+- **App modules:** since 2026-11-23 the app also imports `app.energy_diagram` and `app.community_page`
+  (Community mode, live since 2026-11-24); this works because the repo root is put on
   `sys.path` first (see *Imports*), with `app/` as a namespace package (no `__init__.py`).
-- **What is live (2026-11-24):** `daft-validation` at `f727e74` (pushed 2026-11-23): the
-  supervisor-feedback changes (*Calculation Inputs, Presets and the Energy Diagram*) plus the
-  official-BER work (validation script, clipboard mode, home 21, the 21-home run notes).
-- **Branches (2026-11-24):** `daft-validation` = `app-feedback` = `f727e74` (both pushed);
-  `official-validation` at `9c9fa30` (pushed; already merged into the two above);
-  `community` (from `daft-validation`, community Phase 1, pushed 2026-11-24, **not merged** into
-  `daft-validation`, so not live).
+- **What is live (2026-11-24):** everything. `daft-validation` was fast-forwarded to `09c7fc6`
+  and pushed on 2026-11-24: the supervisor-feedback changes (*Calculation Inputs, Presets and the
+  Energy Diagram*), the official-BER work (validation script, clipboard mode, home 21, the
+  21-home run notes) and **Community mode** (*Community Assessment*). Image analysis in Community
+  mode spends API credit on the app's keys (about a minute per home, at most 25 homes at a time).
+- **Branches (2026-11-24):** `main`, `daft-validation` and `community` are all at `09c7fc6` plus
+  this docs commit, all pushed. `main` was fast-forwarded the same day (it had been at `7884c0c`,
+  29 commits behind); there is no `master` branch. `official-validation` (`9c9fa30`),
+  `app-feedback` (`f727e74`), `organise-codebase` and `similar-house-evidence` are all contained
+  in `main` and need no further merging.
   New work goes on a branch and is merged into `daft-validation` only when the user says so,
   because every push there redeploys the supervisor's app.
 
@@ -902,8 +905,8 @@ public BER data. Input is an address list; Ireland first (census).
   house-style chart with notes on each metric: **done**. "The number of solar panels for each
   house must be capped": **open**, the app has no PV; the user is asking the supervisor. Likely
   meaning: rooftop PV capped by usable roof area, planned in community Phase 2.
-- **Resume here (2026-11-24):** community Phase 1 is on branch `community` (pushed, not merged);
-  the user ran it locally and the map works. Decisions pending from the user: (1) may the CSO Census 2022
+- **Resume here (2026-11-24):** community Phase 1 is merged into `main` and `daft-validation`
+  and live; the user ran it locally first and the map works. Decisions pending from the user: (1) may the CSO Census 2022
   "type of accommodation" Small Area table be downloaded (table code to confirm; it would
   replace the urban/rural dwelling-type guess in the stock model); (2) a small live image run
   (about 5 homes, about 5 minutes of API use) to check census-versus-image and resuming;
