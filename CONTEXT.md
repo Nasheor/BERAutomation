@@ -881,49 +881,104 @@ public BER data. Input is an address list; Ireland first (census).
   primary-energy total is 40 % under the certificates' (321 versus 538 MWh/yr): the same
   older-homes gap as the pipeline (see the 21-home run above).
 
-## Planned Work
+## Work Log: 2026-11-23 to 2026-11-25
 
-- **Mistral as a second, user-selectable vision model, and the paper** (AI estimate versus
-  official BER): full plan in `docs/plans/mistral_provider_and_paper_plan.md` (saved
-  2026-11-12). **Part A, the provider switch, is implemented** (see *Vision Model
-  Providers*) but not yet run against Mistral. It covers the provider switch (`providers.py`, `_complete()`
-  in `claude_analyzer.py`, `--provider` flags, app selector), the paper's research questions
-  and study design (official BERs from listings + SEAI register, about 250 homes, census-only
-  baseline, HWB-versus-DEAP error separated from perception error), and target venues with
-  dates (SBE27 Delft abstract due 18 Dec 2026).
-- The official-BER sample format and its checker exist (see *Official-BER Sample for the
-  Paper*); the sample is being collected: 21 of about 250 homes on 2026-11-23, none in
-  bands E to G yet.
-- **Session 2026-11-23/24 (summary):** home 21 added with clipboard mode (parsers work on
-  real daft.ie and register pages); first full official-BER run on 21 homes (see *Official-BER
-  Sample*: most of the error is the calculator rating older homes better than DEAP); the
-  supervisor's comments on the app done and live (see *Calculation Inputs, Presets and the
-  Energy Diagram*); community assessment Phase 1 built on branch `community` (see *Community
-  Assessment*).
-- **Supervisor's comments on the app (2026-11-23):** window U-values and their source, preset
-  values shown for the image data, what internal gains are, HWB units (HWB × floor area), a
-  house-style chart with notes on each metric: **done**. "The number of solar panels for each
-  house must be capped": **open**, the app has no PV; the user is asking the supervisor. Likely
-  meaning: rooftop PV capped by usable roof area, planned in community Phase 2.
-- **Resume here (2026-11-24):** community Phase 1 is merged into `main` and `daft-validation`
-  and live; the user ran it locally first and the map works. Decisions pending from the user: (1) may the CSO Census 2022
-  "type of accommodation" Small Area table be downloaded (table code to confirm; it would
-  replace the urban/rural dwelling-type guess in the stock model); (2) a small live image run
-  (about 5 homes, about 5 minutes of API use) to check census-versus-image and resuming;
-  (3) go-ahead for Phase 2 (programme scenarios, grouped retrofit, heat density, rooftop PV with
-  a panel cap) and Phase 3 (SEAI public BER data at area level; the user downloads it).
-  Plan file: `C:/Users/nagar/.claude/plans/abundant-shimmying-rain-of-7975d1e2-787d-4a3c-8b09-e7bc02f85aad.md`.
-- Next for the paper: a fairer baseline than the leave-one-out commonest band (degenerate on
-  the 21 homes: A3 and C3 tie), such as the median kWh or the census-only estimate, which now
-  exists (`census_home_estimate`, 4/21 exact); an images-only switch; why the calculator rates
-  pre-2010 homes so much better than DEAP (HWB-versus-DEAP gap); keep collecting homes,
-  especially bands E to G; a valid Mistral key and the two-model comparison.
-- **Checking the app without a browser** (the Claude in Chrome extension was not connected on
-  2026-11-23/24): `streamlit.testing.v1.AppTest.from_file("app/streamlit_app.py")` drives the
-  real script (switch `at.sidebar.radio[0]` to a mode, set inputs, click buttons, read
-  `at.metric` / `at.markdown` / `at.dataframe`); a ready-made `PipelineResult` or a saved
-  community put into `at.session_state` avoids API calls. Plotly figures were checked as images
-  with `fig.write_html(...)` and headless Edge (`msedge --headless=new --screenshot=...
-  --virtual-time-budget=...`; add `--use-angle=swiftshader --enable-unsafe-swiftshader` for
-  WebGL). MapLibre map tiles did not render reliably that way, so the map zoom is unit-tested.
-  The driver scripts were kept in `output/dev/` (not in git).
+1. **Home 21 with clipboard mode** (`c9726dc`, branch `official-validation`). D13 DC65 (terraced,
+   2006, B3 142.77) was read entirely from the copied daft.ie and register pages; the parsers
+   needed no change. Sample: 21 homes.
+2. **First official-BER validation run** on the 21 homes, Claude, 3 runs each (`9c9fa30`; numbers
+   under *Official-BER Sample for the Paper*). Pipeline band exact 11/63, within one 19/63;
+   the calculator on the certificate's own era and area exact 18/63. Most of the error is the
+   calculator rating pre-2010 homes as more efficient than DEAP; homes after 2010 come out close.
+   Floor area is the weakest input (mean |error| 80 %). The leave-one-out baseline is degenerate
+   on this sample (0/21).
+3. **Supervisor's comments on the app** (`546817a`, branch `app-feedback`; see *Calculation
+   Inputs, Presets and the Energy Diagram*): calculation-inputs table with origin and source of
+   every value (window U-value first), editable presets (Assumptions tab, `CalculationOverrides`),
+   internal gains explained, HWB shown per m² and as kWh/yr, the mixed-unit bar chart replaced by
+   a house diagram in kWh/yr, worked formulas. Results unchanged without overrides (400
+   combinations checked). Merged into `daft-validation` and pushed 2026-11-23 (`f727e74`, live).
+4. **Community assessment, Phase 1** (`64f6851`; see *Community Assessment*): census stock model
+   per Small Area, `assess_community` with resumable image analysis, summaries, the CLI
+   `scripts/assess_community.py`, and Community mode in the app. Census-only run on the 21 sample
+   homes: band exact 4/21, community primary total 40 % under the certificates. The user tested
+   it locally on 2026-11-24 (map works).
+5. **Merges and pushes (2026-11-24):** `main` (was `7884c0c`, 29 commits behind), `daft-validation`
+   and `community` fast-forwarded to the same commit and pushed; Community mode is live. Notes
+   updated in `09c7fc6`, `121133a` and this commit. Every other branch is contained in `main`.
+6. **Supervisor's comments, status:** done except "the number of solar panels for each house
+   must be capped" (the app has no PV; the user is asking what was meant).
+
+### Checking the app without a browser
+
+The Claude in Chrome extension was not connected on 2026-11-23/24.
+`streamlit.testing.v1.AppTest.from_file("app/streamlit_app.py")` drives the real script: switch
+`at.sidebar.radio[0]` to a mode, set inputs, click buttons, read `at.metric` / `at.markdown` /
+`at.dataframe`; a ready-made `PipelineResult` or a saved community put into `at.session_state`
+avoids API calls. Plotly figures were checked as images with `fig.write_html(...)` and headless
+Edge (`msedge --headless=new --screenshot=... --virtual-time-budget=...`; add
+`--use-angle=swiftshader --enable-unsafe-swiftshader` for WebGL). MapLibre map tiles did not
+render reliably that way, so the map zoom is unit-tested. The driver scripts are in
+`output/dev/` (not in git). Stopping a background `streamlit run` task can leave the server
+answering for a few seconds while it shuts down.
+
+## Remaining Work (as of 2026-11-25)
+
+### Waiting on a decision (user or supervisor)
+
+- **Solar panel cap:** ask the supervisor what "the number of solar panels for each house must be
+  capped" means. Likely rooftop PV limited by usable roof area (community Phase 2).
+- **CSO dwelling-type table:** permission to download the Census 2022 "type of accommodation"
+  Small Area table (table code to confirm) and add it to `scripts/build_census_data.py`; it would
+  replace the urban/rural dwelling-type guess in the community stock model.
+- **Small live community image run** (about 5 homes, about 5 minutes of API use) to check the
+  census-versus-image comparison and resuming on real data.
+- **Go-ahead for community Phases 2 and 3** (plan file:
+  `C:/Users/nagar/.claude/plans/abundant-shimmying-rain-of-7975d1e2-787d-4a3c-8b09-e7bc02f85aad.md`).
+
+### Paper (SBE27 Delft abstract due 2026-12-18)
+
+Plan: `docs/plans/mistral_provider_and_paper_plan.md` (its header still says "not implemented";
+Part A, the provider switch, was implemented and run on 2026-11-13).
+- **Baselines:** replace the leave-one-out commonest band (degenerate here) with the median kWh
+  and the census-only estimate (`community.stock.census_home_estimate`, now available: 4/21
+  exact); add an images-only switch to `scripts/validate_official.py`.
+- **HWB versus DEAP for older homes:** find out why the calculator rates pre-2010 homes much
+  better than DEAP even with the certificate's era and area (U-value presets by era, window share,
+  ventilation, hot water, primary energy factors), since this is the largest error source.
+- **Sample:** grow from 21 towards about 250 homes, especially bands E to G (none yet) and more
+  counties; `python scripts/add_official_home.py` (clipboard mode) adds them.
+- **Mistral on the official sample:** `scripts/validate_official.py --provider both` (the local
+  `.env` has a Mistral key; the live app does not). Its confidence does not track its footprint
+  errors (research question 4).
+
+### Community, Phases 2 and 3 (planned, not started)
+
+- **Phase 2:** programme scenarios (the three pathway steps applied to every home, moving
+  `_generate_pathway_scenarios` from the app into `ber_engine`; community MWh, CO2 and band mix
+  before and after; homes reaching B2); grouped retrofit (type × era × size × fuel); heat
+  density for district heating (MWh/yr per km² over the homes' hull or the Small Area polygon,
+  threshold configurable with a cited source); rooftop PV with the number of panels capped by
+  usable roof area and a fixed Irish yield with a cited source.
+- **Phase 3:** compare the census stock model with SEAI's public BER data (the user downloads it)
+  by county × era × dwelling type; official-sample homes grouped by Small Area.
+
+### Pipeline accuracy (open issues)
+
+- **Floor area:** mean |error| 80 % on the 21 homes; 17 of 63 runs fell back to the 10 × 8 m
+  default; "no building contour" for V92 NFR9 and V93 C7N8 (all runs) and X91 A3V9 (one run).
+- Claude's satellite outline is not stable across sessions (TP3C); OpenCV is given Claude's
+  dimensions even when they are rejected as clipped (untested idea: do not pass them).
+- Dormer bungalows read as 2 storeys by Claude (RK10); needs a rule.
+- Era: census says 1991–2000 for TP3C, the assessor 1980s.
+
+### Housekeeping
+
+- **Plotly minimum version:** Community mode's map uses `go.Scattermap`, which needs Plotly 5.24 or
+  later, but `requirements.txt` allows `>=5.18`. Raise the floor to 5.24 so a cloud rebuild cannot
+  pick an older version.
+- **Streamlit deprecation:** `use_container_width` (3 calls in `app/streamlit_app.py`, 4 in
+  `app/community_page.py`) is deprecated ("will be removed after 2025-12-31"); switch to
+  `width="stretch"` before a Streamlit release drops it (`requirements.txt` allows `<2`).
+- **Live app costs:** Community mode's image analysis (up to 25 homes per click) spends the live
+  app's API credit; consider a lower cap or a passphrase for it.
